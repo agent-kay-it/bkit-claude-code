@@ -84,7 +84,7 @@ Run PM Agent Team for product discovery and strategy analysis before Plan phase.
    - 8-section PRD generation
 5. Output PRD to `docs/00-pm/{feature}.prd.md`
 6. Create Task: `[PM] {feature}`
-7. Update .bkit-memory.json: phase = "pm"
+7. Update `.bkit/state/pdca-status.json`: phase = "pm"
 8. Guide user to next step: `/pdca plan {feature}`
 
 **Output Path**: `docs/00-pm/{feature}.prd.md`
@@ -105,8 +105,8 @@ Run PM Agent Team for product discovery and strategy analysis before Plan phase.
 5. **Checkpoint 1 — Requirements Confirmation**: Present understanding of the feature (problem, scope, constraints) and use AskUserQuestion: "요구사항 이해가 맞나요? 빠진 건 없나요?" Wait for user confirmation before proceeding.
 6. **Checkpoint 2 — Clarifying Questions**: Identify underspecified elements (edge cases, error handling, integration points, compatibility). Present organized question list. Wait for answers before generating the document.
 7. Generate Plan document with user-confirmed requirements
-8. Create Task: `[Plan] {feature}`
-9. Update .bkit-memory.json: phase = "plan"
+8. **Complete predecessor Task first**: If a `[PM] {feature}` Task exists and is still `in_progress`, use TaskList to find it and TaskUpdate it to `status: "completed"` before creating the Plan Task (see [Phase Transition Rule](#task-integration)). Then Create Task: `[Plan] {feature}`
+9. Update `.bkit/state/pdca-status.json`: phase = "plan"
 10. Write `## Executive Summary` at document top with 4-perspective table (Problem/Solution/Function UX Effect/Core Value), each 1-2 sentences
 11. **Context Anchor Generation**: After generating Plan document, extract Context Anchor (WHY/WHO/RISK/SUCCESS/SCOPE) from Executive Summary, Requirements, and Risk sections. Write as `## Context Anchor` table between Executive Summary and Section 1. This anchor propagates to Design/Do documents for cross-session context continuity.
 12. **MANDATORY**: After completing the document, also output the Executive Summary table in your response so the user sees it immediately without opening the file
@@ -137,8 +137,8 @@ Run PM Agent Team for product discovery and strategy analysis before Plan phase.
     - Suggest: "UI 컨셉 페이지를 1-2개 먼저 만든 후 `/design-anchor capture {feature}` 로 디자인 토큰을 잠그세요"
     - If Design Anchor already exists (`docs/02-design/styles/{feature}.design-anchor.md`), embed it in the Design document as `## Design Anchor` section
     - This ensures design tokens (colors, typography, spacing) are locked before implementation
-12. Create Task: `[Design] {feature}` (blockedBy: Plan task)
-13. Update .bkit-memory.json: phase = "design"
+12. **Complete predecessor Task first**: Use TaskList to find the `[Plan] {feature}` Task (and any earlier phase Task for this feature still `in_progress`) and TaskUpdate each to `status: "completed"` — this resolves the `blockedBy` chain and prevents stale phase status from leaking into prompt context (see [Phase Transition Rule](#task-integration)). Then Create Task: `[Design] {feature}` (blockedBy: Plan task)
+13. Update `.bkit/state/pdca-status.json`: phase = "design"
 
 **Output Path**: `docs/02-design/features/{feature}.design.md`
 
@@ -174,8 +174,8 @@ Run PM Agent Team for product discovery and strategy analysis before Plan phase.
     - At module/file level: `// Design Ref: §{section} — {decision rationale}`
     - At critical logic: `// Plan SC: {success criteria being addressed}`
     - These comments create traceable links from code back to design decisions
-14. Create Task: `[Do] {feature}` (blockedBy: Design task)
-15. Update .bkit-memory.json: phase = "do"
+14. **Complete predecessor Task first**: Use TaskList to find the `[Design] {feature}` Task (and any earlier phase Task for this feature still `in_progress`) and TaskUpdate each to `status: "completed"` — this resolves the `blockedBy` chain and prevents stale phase status from leaking into prompt context (see [Phase Transition Rule](#task-integration)). Then Create Task: `[Do] {feature}` (blockedBy: Design task)
+15. Update `.bkit/state/pdca-status.json`: phase = "do"
 
 **--scope Parameter**:
 ```
@@ -261,8 +261,8 @@ Run PM Agent Team for product discovery and strategy analysis before Plan phase.
     - "Critical만 수정" — iterate critical only
     - "그대로 진행" — accept current state
     Wait for user decision before proceeding.
-12. Create Task: `[Check] {feature}` (blockedBy: Do task)
-13. Update .bkit-memory.json: phase = "check", matchRate
+12. **Complete predecessor Task first**: Use TaskList to find the `[Do] {feature}` Task (and any earlier phase Task for this feature still `in_progress`) and TaskUpdate each to `status: "completed"` — this resolves the `blockedBy` chain and prevents stale phase status from leaking into prompt context (see [Phase Transition Rule](#task-integration)). Then Create Task: `[Check] {feature}` (blockedBy: Do task)
+13. Update `.bkit/state/pdca-status.json`: phase = "check", matchRate
 
 **Output Path**: `docs/03-analysis/{feature}.analysis.md`
 
@@ -281,7 +281,7 @@ Run PM Agent Team for product discovery and strategy analysis before Plan phase.
    - `QA_PASS` → auto-advance to `report` phase
    - `QA_FAIL` → fall back to `iterate` phase
    - `QA_SKIP` → mark qa as skipped, proceed to `report`
-5. Create Task: `[QA] {feature}`
+5. **Complete predecessor Task first**: Use TaskList to find the `[Check] {feature}` Task and the latest `[Act-N] {feature}` Task (and any earlier phase Task for this feature still `in_progress`) and TaskUpdate each to `status: "completed"` (see [Phase Transition Rule](#task-integration)). Then Create Task: `[QA] {feature}`
 6. Update `.bkit/state/pdca-status.json`: phase = "qa", qaStatus = <PASS|FAIL|SKIP>
 
 **Output Path**: `docs/05-qa/{feature}.qa-report.md`
@@ -294,7 +294,7 @@ Run PM Agent Team for product discovery and strategy analysis before Plan phase.
 2. **Call pdca-iterator Agent**
 3. Auto-fix code based on Gap list
 4. Auto re-run Check after fixes
-5. Create Task: `[Act-N] {feature}` (N = iteration count)
+5. **Complete predecessor Task first**: Use TaskList to find the `[Check] {feature}` Task and any prior `[Act-*] {feature}` Task for this feature still `in_progress` and TaskUpdate each to `status: "completed"` (see [Phase Transition Rule](#task-integration)). Then Create Task: `[Act-N] {feature}` (N = iteration count)
 6. Stop when >= 90% reached or max iterations (5) hit
 
 **Iteration Rules**:
@@ -322,8 +322,8 @@ Run PM Agent Team for product discovery and strategy analysis before Plan phase.
    - Overall Success Rate: X/Y criteria met
 7. Include `## Executive Summary` with `### 1.3 Value Delivered` reflecting actual results (4 perspectives with metrics)
 8. **MANDATORY**: After completing the report, also output the Executive Summary table in your response
-9. Create Task: `[Report] {feature}`
-10. Update .bkit-memory.json: phase = "completed"
+9. **Complete predecessor Task first**: Use TaskList to find the `[QA] {feature}` Task (or the `[Check] {feature}` / latest `[Act-N] {feature}` Task if QA was skipped) and any earlier phase Task for this feature still `in_progress`, and TaskUpdate each to `status: "completed"` (see [Phase Transition Rule](#task-integration)). Then Create Task: `[Report] {feature}`
+10. Update `.bkit/state/pdca-status.json`: phase = "completed"
 
 **Output Path**: `docs/04-report/{feature}.report.md`
 
@@ -339,7 +339,7 @@ Start PDCA Team Mode using Claude Code Agent Teams (requires `CLAUDE_CODE_EXPERI
 4. Generate team strategy via `generateTeamStrategy(level)`:
    - Dynamic: 3 teammates (developer, frontend, qa) — CTO Lead orchestrates
    - Enterprise: 5 teammates (architect, developer, qa, reviewer, security) — CTO Lead orchestrates
-5. CTO Lead (cto-lead agent, opus) automatically:
+5. CTO Lead (cto-lead agent, fable) automatically:
    - Sets technical direction and selects orchestration pattern
    - Distributes tasks to teammates based on PDCA phase
    - Enforces quality gates (90% Match Rate threshold)
@@ -380,18 +380,19 @@ Feature: user-auth
 | Level | Available | Teammates | CTO Lead |
 |-------|:---------:|:---------:|:--------:|
 | Starter | No | - | - |
-| Dynamic | Yes | 3 | cto-lead (opus) |
-| Enterprise | Yes | 6 | cto-lead (opus) |
+| Dynamic | Yes | 3 | cto-lead (fable) |
+| Enterprise | Yes | 6 | cto-lead (fable) |
 
 ### archive (Archive Phase)
 
 1. Verify Report completion status (phase = "completed" or matchRate >= 90%)
-2. Verify PDCA documents exist (plan, design, analysis, report)
-3. Create `docs/archive/YYYY-MM/{feature}/` folder
-4. Move documents (delete from original location)
-5. Update Archive Index (`docs/archive/YYYY-MM/_INDEX.md`)
-6. Update .pdca-status.json: phase = "archived", record archivedTo path
-7. Remove feature from status (or preserve summary with `--summary` option)
+2. **Complete the terminal Task**: Use TaskList to find the `[Report] {feature}` Task and any other `[Phase] {feature}` Task for this feature still `in_progress`, and TaskUpdate each to `status: "completed"` — the feature is terminal, so no phase Task should remain open (see [Phase Transition Rule](#task-integration)).
+3. Verify PDCA documents exist (plan, design, analysis, report)
+4. Create `docs/archive/YYYY-MM/{feature}/` folder
+5. Move documents (delete from original location)
+6. Update Archive Index (`docs/archive/YYYY-MM/_INDEX.md`)
+7. Update .bkit/state/pdca-status.json: phase = "archived", record archivedTo path
+8. Remove feature from status (or preserve summary with `--summary` option)
 
 **Arguments**:
 | Argument | Description | Example |
@@ -409,7 +410,7 @@ Feature: user-auth
 
 **FR-04: Summary Preservation Option** (v1.4.8):
 
-When using `--summary` (or `--preserve-summary`, `-s`), the feature data in `.pdca-status.json`
+When using `--summary` (or `--preserve-summary`, `-s`), the feature data in `.bkit/state/pdca-status.json`
 is converted to a lightweight summary instead of being deleted:
 
 ```json
@@ -440,9 +441,9 @@ Use `--summary` when you need:
 
 ### cleanup (Cleanup Phase) - v1.4.8
 
-Clean up archived features from `.pdca-status.json` to reduce file size.
+Clean up archived features from `.bkit/state/pdca-status.json` to reduce file size.
 
-1. Read archived features from `.pdca-status.json`
+1. Read archived features from `.bkit/state/pdca-status.json`
 2. Display list with timestamps and archive paths
 3. Ask user for confirmation via AskUserQuestion (FR-06)
 4. Delete selected features from status using `cleanupArchivedFeatures()`
@@ -484,7 +485,9 @@ Select features to cleanup:
 
 ### status (Status Check)
 
-1. Read `.bkit-memory.json`
+1. Read `.bkit/state/pdca-status.json` (the live state-of-truth; via the
+   `lib/pdca/status-core.js` API). Note: `.bkit-memory.json` is a deprecated
+   v1.6.0 legacy path that no lib module reads or writes.
 2. Display current feature, PDCA phase, Task status
 3. Visualize progress
 
@@ -556,6 +559,23 @@ Task Creation Pattern:
 │ [Archive] {feature}                    │
 └────────────────────────────────────────┘
 ```
+
+### Phase Transition Rule (task completion)
+
+The diagram above shows task *creation*. Advancing a phase also requires task *completion*:
+
+> **Before creating a new phase's Task, mark every prior `[Phase] {feature}` Task for
+> this feature that is still `in_progress` as `completed`** — use `TaskList` to find them
+> and `TaskUpdate {status: "completed"}` on each. The `archive` action likewise completes
+> the terminal `[Report]` Task.
+
+**Why this matters**: a `blockedBy` chain is only semantically correct when the predecessor
+is `completed` by the time the successor is created. More importantly, Claude Code surfaces
+the native Task list into ambient prompt context every turn. If a predecessor Task is left
+`in_progress`, that stale phase (e.g. "design" during a "do" phase) keeps leaking back to the
+user — disagreeing with `.bkit/state/pdca-status.json`'s `phase` field, which is the phase
+source of truth. Completing predecessors keeps the two in sync. Each phase action above
+embeds this step immediately before its Create-Task step.
 
 ## Agent Integration
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * bkit Vibecoding Kit - SessionStart Hook (v2.1.21, uses BKIT_VERSION from lib/core/version)
+ * bkit Vibecoding Kit - SessionStart Hook (v2.1.31, uses BKIT_VERSION from lib/core/version)
  *
  * Thin orchestrator that delegates to startup modules:
  *   1. migration   - Legacy path migration (docs/ -> .bkit/)
@@ -152,7 +152,7 @@ try {
           feature: '',
           pdcaPhase: 'idle',
           orchestrationPattern: 'leader',
-          ctoAgent: agentState.ctoAgent || 'opus',
+          ctoAgent: agentState.ctoAgent || 'fable',
           startedAt: null,
           lastUpdated: new Date().toISOString(),
           teammates: [],
@@ -297,7 +297,11 @@ try {
 const { generateSessionTitle } = require('../lib/pdca/session-title');
 const primaryFeature = onboardingContext.onboardingData.primaryFeature || pdcaStatus?.primaryFeature || null;
 const currentPhase = onboardingContext.onboardingData.phase || pdcaStatus?.currentPhase || null;
-const sessionIdForFp = process.env.CLAUDE_SESSION_ID || 'default';
+// GitHub #119: Claude Code exposes CLAUDE_CODE_SESSION_ID (not CLAUDE_SESSION_ID).
+// Reading the legacy name made sessionId null on SessionStart → the per-session
+// `·a1b2` title tag from #111 never applied → concurrent same-repo sessions
+// rendered identical titles. Prefer the CC var, keep legacy as back-compat fallback.
+const sessionIdForFp = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || 'default';
 const sessionTitle = generateSessionTitle({
   feature: primaryFeature,
   phase: currentPhase,
@@ -378,26 +382,27 @@ try {
   const reachFile = path.join(root, '.bkit', 'runtime', 'hook-reachability.json');
   if (fs.existsSync(reachFile)) {
     const STALE_THRESHOLD_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
-    const now = Date.now();
     let state = {};
     try { state = JSON.parse(fs.readFileSync(reachFile, 'utf8')); } catch (_) { state = {}; }
-    const expected = ['bash_post', 'write_post', 'skill_post'];
-    const missing = [];
-    const stale = [];
-    for (const key of expected) {
-      const entry = state[key];
-      if (!entry || typeof entry.ts !== 'string') { missing.push(key); continue; }
-      const t = Date.parse(entry.ts);
-      if (Number.isNaN(t) || (now - t) > STALE_THRESHOLD_MS) stale.push(key);
+    // #126: classify drop vs. idle via the pure evaluator. skill_post is
+    // event-driven (only fires on PostToolUse(Skill), which slash-command skill
+    // invocation never produces), so a missing/stale skill_post is suppressed
+    // unless a canary (bash_post/write_post) corroborates a real loader drop
+    // (#57317). See lib/core/hook-reachability.js for the full rationale.
+    const { evaluateReachability } = require('../lib/core/hook-reachability');
+    const { missing, stale, expected, canaryUnhealthy, skillPostIdle, shouldWarn } =
+      evaluateReachability(state, { now: Date.now(), staleThresholdMs: STALE_THRESHOLD_MS });
+    if (skillPostIdle) {
+      debugLog('SessionStart', 'skill_post idle (event-driven; no Skill tool_use this session) — suppressed from reachability warning, canaries healthy');
     }
-    if (missing.length > 0 || stale.length > 0) {
+    if (shouldWarn) {
       try {
         const audit = require('../lib/audit/audit-logger');
         audit.writeAuditLog({
           actor: 'hook', actorId: 'session-start',
           action: 'hook_reachability_lost', category: 'system',
           target: 'PostToolUse', targetType: 'config',
-          details: { missing, stale, expected, file: reachFile },
+          details: { missing, stale, expected, canaryUnhealthy, skillPostIdle, file: reachFile },
           result: 'blocked',
           reason: `bkit MON-CC-NEW-PLUGIN-HOOK-DROP: PostToolUse hook reachability lost. missing=[${missing.join(',')}] stale=[${stale.join(',')}]`,
         });

@@ -2,7 +2,8 @@
  * Invocation Inventory Sanity Tests — file-level cross-check of Addendum counts.
  *
  * Design Ref: bkit-v2110-invocation-contract-addendum.plan.md §3
- * Plan SC: 43 skills / 36 agents / 16 MCP tools / 21 hook events / 24 blocks.
+ * Plan SC: 43 skills / 36 agents / 16 MCP tools / 22 hook events / 25 blocks
+ *          (v2.1.27 #132: 21→22 events, 24→25 blocks — UserPromptExpansion added).
  *
  * v2.1.11 update: 39 → 43 skills (Sprint β added bkit-evals, bkit-explore,
  * pdca-fast-track, pdca-watch).
@@ -60,7 +61,9 @@ EXPECTED_SKILL_NAMES.forEach((name) => {
 // Net: 36 - 6 + 4 = 34.
 // v2.1.17: 6 pdca-eval-* deprecation tombstones re-added as stubs (frontmatter
 // `deprecatedIn` flag); excluded from the active count. Total files = 40.
-// See docs/06-guide/contract-baseline-rollforward.guide.md.
+// v2.1.25 (#128, ADR 0014): live stubs removed; deprecation governance moved
+// to test/contract/deprecation-registry.json. agents/ holds active agents only.
+// See docs/06-guide/contract-baseline-rollforward.guide.md §5.6.
 const allAgentFiles = fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md'));
 
 // v2.1.18: hasDeprecatedInFrontmatterFile imported from lib/util/frontmatter (CO-5).
@@ -71,19 +74,31 @@ const deprecatedAgentFiles = allAgentFiles.filter(
   (f) => hasDeprecatedInFrontmatterFile(path.join(agentsDir, f))
 );
 
+// v2.1.25 (#128): machine-readable deprecation registry (ADR 0014).
+const deprecationRegistry = JSON.parse(
+  fs.readFileSync(path.join(ROOT, 'test', 'contract', 'deprecation-registry.json'), 'utf8')
+);
+const registryAgentNames = Object.keys(deprecationRegistry.agents || {}).sort();
+
 // v2.1.17 (CO-3.1): EXPECTED_*_AGENT_NAMES imported from docs-code-invariants SoT.
 test('Active Agents count exactly 34', () => assert.strictEqual(agentFiles.length, 34));
 test('Active Agents count matches SoT', () => assert.strictEqual(agentFiles.length, EXPECTED_ACTIVE_AGENT_NAMES.length));
-test('Deprecated Agent tombstones exactly 6', () => assert.strictEqual(deprecatedAgentFiles.length, 6));
-test('Deprecated Agent count matches SoT', () => assert.strictEqual(deprecatedAgentFiles.length, EXPECTED_DEPRECATED_AGENT_NAMES.length));
+test('No deprecated stub files remain in agents/ (v2.1.25 #128)', () => assert.strictEqual(deprecatedAgentFiles.length, 0));
+test('Deprecation registry agent tombstones exactly 6', () => assert.strictEqual(registryAgentNames.length, 6));
+test('Deprecated Agent count matches SoT', () => assert.strictEqual(registryAgentNames.length, EXPECTED_DEPRECATED_AGENT_NAMES.length));
+test('Registry agent tombstones deep-equal SoT', () => {
+  assert.deepStrictEqual(registryAgentNames, [...EXPECTED_DEPRECATED_AGENT_NAMES].sort());
+});
 
 EXPECTED_ACTIVE_AGENT_NAMES.forEach((name) => {
   test(`Agent '${name}.md' exists`, () => assert.ok(agentFiles.includes(`${name}.md`)));
 });
 
 EXPECTED_DEPRECATED_AGENT_NAMES.forEach((name) => {
-  test(`Deprecated Agent stub '${name}.md' exists with deprecatedIn`, () => {
-    assert.ok(deprecatedAgentFiles.includes(`${name}.md`));
+  test(`Deprecated Agent '${name}' has registry tombstone and no stub file`, () => {
+    const entry = (deprecationRegistry.agents || {})[name];
+    assert.ok(entry && entry.deprecatedIn, `registry entry missing deprecatedIn: ${name}`);
+    assert.ok(!fs.existsSync(path.join(agentsDir, `${name}.md`)), `stub file must be absent: ${name}.md`);
   });
 });
 
@@ -91,19 +106,20 @@ EXPECTED_DEPRECATED_AGENT_NAMES.forEach((name) => {
 // v2.1.17 (CO-3.1): EXPECTED_HOOK_EVENT_NAMES imported from docs-code-invariants SoT.
 const hooksJson = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
 const hookEventNames = Object.keys(hooksJson.hooks);
-test('Hooks count exactly 21 events', () => assert.strictEqual(hookEventNames.length, 21));
+test('Hooks count exactly 22 events', () => assert.strictEqual(hookEventNames.length, 22));
 test('Hooks count matches SoT', () => assert.strictEqual(hookEventNames.length, EXPECTED_HOOK_EVENT_NAMES.length));
 
 EXPECTED_HOOK_EVENT_NAMES.forEach((name) => {
   test(`Hook '${name}' registered`, () => assert.ok(hookEventNames.includes(name), `missing: ${name}`));
 });
 
-// 24 blocks = 1 SessionStart + 2 PreToolUse + 3 PostToolUse + 18 rest
+// v2.1.27 (#132): 25 blocks = 1 SessionStart + 2 PreToolUse + 3 PostToolUse + 19 rest
+// (UserPromptExpansion added as a single "rest" event block).
 let blockCount = 0;
 for (const [, entries] of Object.entries(hooksJson.hooks)) {
   blockCount += entries.length;
 }
-test('Hooks total blocks = 24', () => assert.strictEqual(blockCount, 24));
+test('Hooks total blocks = 25', () => assert.strictEqual(blockCount, 25));
 test('PreToolUse has 2 blocks', () => assert.strictEqual(hooksJson.hooks.PreToolUse.length, 2));
 test('PostToolUse has 3 blocks', () => assert.strictEqual(hooksJson.hooks.PostToolUse.length, 3));
 
@@ -157,19 +173,23 @@ CC_REG_FILES.forEach((f) => {
 });
 
 // ==================== Config Files ====================
-test('.eslintrc.json exists', () => assert.ok(fs.existsSync(path.join(ROOT, '.eslintrc.json'))));
+test('eslint.config.js exists', () => assert.ok(fs.existsSync(path.join(ROOT, 'eslint.config.js'))));
 test('.prettierrc exists', () => assert.ok(fs.existsSync(path.join(ROOT, '.prettierrc'))));
 
 // ==================== Frontmatter cross-check: v2.1.10 ENH-202 — context:fork expanded ====================
 // v2.1.9: only zero-script-qa had context:fork (1/39)
 // v2.1.10 Sprint 6 NEW 6-1 (ENH-202): expanded to 9 skills (zero-script-qa retained + 8 new).
+// v2.1.31 (CC v2.1.218 compat): qa-phase removed from the fork set → 8 skills.
+//   context:fork strips AskUserQuestion at the sub-agent boundary (CC #34592 /
+//   #54892), so qa-phase now runs in the main context. The intentional context
+//   change is declared in test/contract/deprecation-registry.json contextChanges.
 // The EXPECTED set below must be kept in sync with Design §3.4.1 and the
 // `context-fork-l1.test.js` acceptance list. When extending further, update both.
 test('zero-script-qa has context:fork (v2.1.9 baseline preserved)', () => {
   const md = fs.readFileSync(path.join(skillsDir, 'zero-script-qa', 'SKILL.md'), 'utf8');
   assert.ok(/context:\s*fork/m.test(md));
 });
-test('v2.1.10 ENH-202: context:fork skill set matches expected 9 (readonly-safe skills only)', () => {
+test('v2.1.31: context:fork skill set matches expected 8 (readonly-safe producers; qa-phase excluded)', () => {
   const EXPECTED_FORK_SKILLS = [
     'phase-1-schema',
     'phase-2-convention',
@@ -177,7 +197,6 @@ test('v2.1.10 ENH-202: context:fork skill set matches expected 9 (readonly-safe 
     'phase-4-api',
     'phase-5-design-system',
     'phase-8-review',
-    'qa-phase',
     'skill-status',
     'zero-script-qa',
   ].sort();
@@ -185,10 +204,35 @@ test('v2.1.10 ENH-202: context:fork skill set matches expected 9 (readonly-safe 
   for (const name of skillDirs) {
     const md = path.join(skillsDir, name, 'SKILL.md');
     if (!fs.existsSync(md)) continue;
-    if (/context:\s*fork/m.test(fs.readFileSync(md, 'utf8'))) forkSkills.push(name);
+    // v2.1.31: scope the fork check to the frontmatter block. `context: fork`
+    // is a frontmatter field; scanning the whole file would false-match skills
+    // that merely mention the string in prose (e.g. qa-phase's gate rationale).
+    const content = fs.readFileSync(md, 'utf8');
+    const fmEnd = content.indexOf('\n---', 4);
+    const fm = fmEnd > 0 ? content.slice(0, fmEnd) : content;
+    if (/^context:\s*fork/m.test(fm)) forkSkills.push(name);
   }
   forkSkills.sort();
   assert.deepStrictEqual(forkSkills, EXPECTED_FORK_SKILLS);
+});
+test('v2.1.31: qa-phase is NOT context:fork and retains AskUserQuestion (main-context interactive gate)', () => {
+  const md = fs.readFileSync(path.join(skillsDir, 'qa-phase', 'SKILL.md'), 'utf8');
+  const fmEnd = md.indexOf('\n---', 4);
+  const fm = md.slice(0, fmEnd);
+  // Must NOT be forked — AskUserQuestion is stripped at the fork boundary (CC #34592/#54892).
+  assert.ok(!/^context:\s*fork/m.test(fm), 'qa-phase must not declare context: fork');
+  // Must retain AskUserQuestion so the PRE-SCAN continue/abort gate works in the main context.
+  assert.ok(/^\s*-\s*AskUserQuestion\s*$/m.test(fm), 'qa-phase must retain AskUserQuestion in allowed-tools');
+});
+test('v2.1.31: the 8 producer fork skills each declare background:false (CC v2.1.218 opt-out)', () => {
+  const EXPECTED = ['phase-1-schema','phase-2-convention','phase-3-mockup','phase-4-api',
+    'phase-5-design-system','phase-8-review','skill-status','zero-script-qa'];
+  for (const name of EXPECTED) {
+    const md = fs.readFileSync(path.join(skillsDir, name, 'SKILL.md'), 'utf8');
+    const fmEnd = md.indexOf('\n---', 4);
+    const fm = md.slice(0, fmEnd);
+    assert.ok(/^background:\s*false\b/m.test(fm), `${name} must declare background: false`);
+  }
 });
 
 // ==================== CLAUDE.md rules ====================

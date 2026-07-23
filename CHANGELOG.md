@@ -5,91 +5,942 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.1.21] - 2026-05-29 (branch: `release/v2.1.21-issue-response`)
+## [2.1.31] - 2026-07-23
 
-> **Status**: Issue Response Sprint — 2건의 외부 dogfooder open issue를 단일 통합 sprint(`v2121-issue-response`, Trust L4)으로 해소. **#111** (sessionTitle 충돌, reporter @wonuseo 외부 dogfooder #3) + **#113** (Sprint 화면 출력 강제 미흡, reporter @rohwonseok-ops). 코드베이스 file:line 실측 검증 기반(외부 dogfooder 주장 무검증 수용 금지 원칙).
-> **Scope**: 8 features (P0×3 #111 / P1×4 + P2×1 #113) · 신규 모듈 2 (`lib/sprint/executive-summary.js`, `scripts/sprint-skill-stop.js`) · 리팩터 8 (session-title-cache / session-title / 4 Stop emitter / unified-stop / advance-phase.usecase / sprint-handler) · 신규/확장 TC 5 파일 (79 신규 TC) · 1 신규 ADR (0012 Sprint Stop Hook Output Enforcement).
-> **Sprint planning**: `docs/01-plan/features/v2121-issue-response.master-plan.md` + `docs/00-pm/v2121-issue-response.prd.md` (sprint-master-planner agent 3rd-cycle dogfooding output).
-> **Anti-Mission preserved**: session-title 포맷 전면 재설계 안 함 (`[bkit] {action} {feature}` 골격 유지 + tag 부착만) · PDCA executive-summary 와 코드 공유 안 함 (Sprint 별도 shape) · `getActiveSkill()` 근본 수정(skill_post drop #57317) 안 함 (skill_name 우선 의존 우회만) · sprint phase enum/state-machine 불변.
+> **Status**: Claude Code v2.1.218 compatibility response (proactive, from the
+> `/bkit:cc-version-analysis` cycle #29). CC v2.1.218 changed skills with
+> `context: fork` to run in the **background by default** (opt out with
+> `background: false`). bkit ships 9 fork skills — all silently affected on
+> CC ≥ 2.1.218. **No Guessing**: the fix was grounded against the CC CHANGELOG
+> and four verified GitHub issues, not inferred. The key finding reshaped the
+> fix: `background: false` restores foreground *scheduling* but does **not**
+> restore `AskUserQuestion` — that tool is stripped at the **fork sub-agent
+> boundary** regardless of foreground/background (CC #34592, #46654, #54892),
+> so a genuinely interactive fork skill must leave `context: fork` entirely.
 
-### Issue #111 — Session Title Isolation (Phase B, P0) — extends #77
+### CC v2.1.218 Fork Background-Default Compatibility
 
-같은 PROJECT_DIR 의 병렬 세션이 동일 feature/phase 일 때 **동일한 창 제목**(`[bkit] PLAN f1`)을 갖던 v2.1.6~v2.1.20 전 버전 버그를 해소 (잘못된 창에 위험 명령 입력 리스크). #77 v2.1.6 Phase A 는 per-message 덮어쓰기·opt-out·stale TTL 만 해결했고 session 격리는 미완이었음.
+- **Root cause (grounded, not speculated)**: `context: fork` runs a skill as a
+  *foreground sub-agent*. CC v2.1.218 flips such skills to background by default.
+  Separately and pre-existing, `AskUserQuestion` (+ `EnterPlanMode`, deferred
+  tools) is unavailable in *any* sub-agent context — the CC sub-agents doc
+  promises foreground pass-through, but issues #34592/#46654/#54892 (the last a
+  reopened regression with a repro) show it is stripped at the fork boundary.
+  Verified directly via `gh`; qa-phase was the only bkit fork skill declaring
+  `AskUserQuestion`, and it invoked it 0 times in-body (a latent, degraded gate).
+- **Fix 1 — 8 producer skills opt out of background-by-default**: `phase-1-schema`,
+  `phase-2-convention`, `phase-3-mockup`, `phase-4-api`, `phase-5-design-system`,
+  `phase-8-review`, `zero-script-qa`, `skill-status` each add `background: false`
+  to their frontmatter, pinning pre-218 foreground execution (No Guessing: the
+  execution mode is now explicit, not inherited from a changed CC default).
+  Backward-safe — CC < 2.1.218 ignores the unknown key; 2.1.218's boolean parser
+  accepts it.
+- **Fix 2 — qa-phase leaves the fork set (main-context interactive gate)**:
+  `qa-phase` drops `context: fork` so it runs in the main session context, where
+  `AskUserQuestion` works. Its PRE-SCAN CRITICAL "continue/abort" gate is upgraded
+  from a degraded plain-text fallback to a real `AskUserQuestion` call, issued
+  directly in the main context (never delegated to a sub-agent, which would strip
+  it again). This is the only way to make the gate genuinely interactive.
+- **Invocation Contract — `contextChanges` allowance (ADR 0014 pattern)**: removing
+  `context: fork` from qa-phase collides with the dual-baseline drift gate (both
+  the v2.1.9 LTS and v2.1.16 Latest baselines record `context: fork`, and the SOP
+  keeps LTS immutable). Rather than rewrite historical baseline JSON, a new
+  `contextChanges` section in `test/contract/deprecation-registry.json` declares
+  the intentional change machine-readably, and `contract-test-run.js` L1-SK
+  consults it — mirroring ADR 0014's deprecation-registry philosophy. Both
+  baselines stay green with baseline JSON untouched; no Latest rollforward needed
+  (the baseline schema does not capture the new `background` key either).
+- **MF-2 — recommended CC bumped**: `lib/infra/cc-version-checker.js`
+  `RECOMMENDED_VERSION` 2.1.198 → 2.1.218 (was 20 releases stale). README,
+  SessionStart advisory, and marketplace narrative synced. Install floor
+  (v2.1.143), model floor (v2.1.170), and runtime minimum (v2.1.78) unchanged.
+- **Hygiene**: `lib/cc-regression/registry.js` MON-CC-06-51165 note corrected
+  ("sole fork user" → 8 producer fork skills + qa-phase exit). The
+  `invocation-inventory.test.js` fork detection is now frontmatter-scoped (it
+  previously false-matched skills that merely mention `context: fork` in prose).
+- **Tests**: fork set expectation 9 → 8; new regressions assert each producer
+  declares `background: false`, that qa-phase is not forked yet retains
+  `AskUserQuestion`, and the `contextChanges` allowance. All contract tests green
+  vs both baselines (v2.1.9: 222, v2.1.16: 243 assertions), context-fork-l1 64/64,
+  invocation-inventory 215/215, integration-runtime 23/23; docs=code 0 drift.
+- **Scope note**: the deeper "interactivity inside a forked skill" architecture
+  (options B/C beyond qa-phase) is intentionally out of scope — it is not a
+  regression introduced by v2.1.218. Architecture counts invariant
+  (44 skills · 34 agents · 22 hook events).
 
-- **F1** `lib/core/session-title-cache.js` — PROJECT_DIR 당 단일 flat record → `{ $schemaVersion: 2, sessions: { [sessionId]: {...} } }` map 구조 전환. `session-ctx-fp.js` 검증 패턴 미러 (atomic write + inline GC: stale 7d TTL + LRU cap 200). 레거시 flat record 는 `readCache()` 에서 1회 자동 마이그레이션 (backward-compat). `isSameAsCached` per-session lookup 으로 전환 → 세션 B 가 세션 A record 를 clobber 하던 부작용(ENH-228 phase-change-only dedup 파괴) 제거.
-- **F2** `lib/pdca/session-title.js` — sessionId 기반 stable short tag(`·a1b2`, sha256 절단) 를 title 끝에 부착(`[bkit] PLAN f1 ·a1b2`). `{tag}` format 토큰 지원 + 미포함 format 은 자동 append. sessionId 부재 시 tag 생략(backward-compat). `sessionTag()` export.
-- **F3** session_id threading — `scripts/{iterator-stop,plan-plus-stop,pdca-skill-stop,gap-detector-stop}.js` 4개 Stop emitter(5개 호출)가 `generateSessionTitle({ ..., sessionId: input.session_id })` 로 세션 식별자 전달 (이전엔 미전달 → tag 미부착).
+## [2.1.30] - 2026-07-14
 
-### Issue #113 — Sprint Output Enforcement (P1/P2) — extends #93
+> **Status**: Issue #139 (@thenopen, surfaced via Claude Code's `/doctor`
+> health-check) — a real reliability defect. The `Stop` event hook
+> (`scripts/unified-stop.js`, `timeout: 10000` in `hooks/hooks.json`) occasionally
+> stalled far past its own 10 s timeout: across ~50 sessions / 5 days the reporter
+> measured a healthy ~0.8 s average but a **928,551 ms (~15.5 min) maximum**, with
+> 14 timeout-cancellations. Because `Stop` hooks gate turn completion, every stall
+> blocked the end of a turn for its full duration. No Guessing: the root cause was
+> reproduced end-to-end (not inferred from the subsystem list in the report).
 
-Sprint 의 success/intermediate/status/watch 경로가 raw JSON 만 반환하여 100% LLM narration 에 의존하던 가시성 갭을 해소. PDCA 와 동등한 Stop hook 출력 강제를 Sprint 에 도입.
+### Stop-Hook stdin-Block Hardening (Issue #139)
 
-- **F4** `lib/sprint/executive-summary.js` (신규) — Sprint shape Executive Summary(Mission/Result/matchRate/Cross-Sprint Integration/Invariant/plugin validate). PDCA shape(problem/solution/...)와 **별도** (#113 §D). 순수 모듈(디스크 I/O 없음). `formatStatusScreen()`/`formatFeatureTable()` 로 F8 과 per-feature 표 단일 소스 공유.
-- **F5** `scripts/sprint-skill-stop.js` (신규) — Sprint Stop hook. Exec Summary + AskUserQuestion + sessionTitle 출력. **run-export 패턴**(`module.exports = { run }`, cto-stop/team-stop 와 동일) 채택 — bare-require-`{}` 패턴(pdca-skill-stop)은 unified-stop `executeHandler` 의 `require()` 경유 시 no-op 이므로, 실제 dispatch 보장을 위해 run-export 필수. skill_name 우선 의존(#57317 회피).
-- **F6** `scripts/unified-stop.js` + **신규 `lib/core/active-skill-marker.js`** — `SKILL_HANDLERS` 에 `'sprint'` 등록 + **cross-process active-skill 마커** dispatch 경로. **실 `claude -p` 검증으로 발견한 결함**: CC 는 Stop payload 에 `skill_name` 미포함(`hasSkillName:false` 실측), `getActiveSkill()` 는 in-memory 라 cross-process 무용 + skill_post #57317 drop → `detectActiveSkill()` 4경로 전멸 → 기존 설계로는 **어떤 skill Stop handler 도 production 에서 미발동**(PDCA 포함). 해결: sprint-handler 가 `.bkit/runtime/active-skill.json` 기록 → unified-stop peek(detectActiveSkill 3.5) → sprint-skill-stop consume(TTL 10분 + consume-once). 실 런타임 `Detection result: activeSkill="sprint"` → `handled:true` 확인.
-- **F7** `lib/application/sprint-lifecycle/advance-phase.usecase.js` — SUCCESS path 에 `phaseTransitionSummary` 출력 추가. caller-injected `deps.transitionSummaryBuilder` (#93 failureReporter DI 규율 미러) — usecase 순수성 유지(fs write·lib/sprint import 없음), `scripts/sprint-handler.js handlePhase` 가 wiring.
-- **F8** `scripts/sprint-handler.js` — `handleStatus`/`handleWatch` 가 `display` 필드(human-readable per-feature 표 + gates 한 줄 요약)를 결과에 첨부 (#113 §C). raw JSON 은 프로그램 사용을 위해 보존.
+- **Root cause (reproduced, not speculated)**: every bkit hook reads its payload
+  through `lib/core/io.js` `readStdinSync()`, which used
+  `fs.readFileSync(0, 'utf8')` — a blocking read on stdin (fd 0) with **no
+  timeout**. It returns only when stdin reaches EOF, i.e. when Claude Code closes
+  the hook's stdin write-end. If CC keeps that write-end open (busy, backpressure,
+  delayed close), the hook blocks for exactly that long. Reproduction against the
+  real hook: stdin closed immediately → 0.19 s; writer holding the stdin pipe open
+  4 s → **4.07 s**, with `user` CPU flat at 0.19 s — the process is *blocked on
+  I/O*, not burning CPU, matching the issue's profile (healthy average, extreme
+  tail, low CPU).
+- **Blast radius**: `readStdinSync()` is called by **36 files** — effectively every
+  bkit hook script. The issue was filed against `unified-stop.js`, but the defect
+  lives in the shared function, so the fix is central and protects **all** hook
+  events (PreToolUse, PostToolUse, Stop, SessionEnd, …), not just Stop.
+- **Fix 1 — central bounded parse-early read (`lib/core/io.js`)**: `readStdinSync()`
+  now reads fd 0 incrementally with `fs.readSync` and returns **the instant the
+  accumulated buffer holds a complete JSON value** — it never waits for EOF, which
+  was the entire source of the stall. The raw-fd path creates no libuv stream
+  handle, so the process still exits promptly. The return contract is unchanged
+  (empty → `{}`, malformed → `{}` unless `BKIT_STRICT_STDIN=1` rethrows). Reproduced
+  case: **15.5 min → ~1 ms**.
+- **Fix 2 — hard-bounded async read for the turn-gating Stop hook
+  (`scripts/unified-stop.js`)**: a new `readStdinBounded(timeoutMs)` export reads
+  stdin event-based with parse-early **and** a hard `setTimeout` budget, and
+  **destroys `process.stdin` on resolve** (without that, the open stdin handle keeps
+  the event loop alive until EOF and the process lingers even after the payload is
+  parsed — a subtle trap that would reintroduce the stall). `unified-stop.js` awaits
+  it inside an async IIFE, so the Stop hook can never exceed
+  `STDIN_READ_TIMEOUT_MS` even for the pathological no-data / truncated + held-open
+  pipe that the sync reader cannot hard-bound.
+- **Fix 3 — non-CPU lock backoff (`lib/core/state-store.js`)**: `lock()` previously
+  backed off with a CPU-burning busy-wait spin (`while (Date.now() < waitUntil) {}`)
+  that pinned a core for the retry interval. Replaced with a synchronous
+  `Atomics.wait` sleep (portable, no native deps, no CPU burn), addressing the
+  issue's "lock-wait / retry-without-backoff" note for the ~4 `lockedUpdate` calls
+  in the Stop chain.
+- **New constant**: `STDIN_READ_TIMEOUT_MS` (default 2000 ms, env override
+  `BKIT_STDIN_TIMEOUT_MS`) — ~2.5× the observed healthy average, well under bkit's
+  `HOOK_TIMEOUT_MS` (5000) and CC's Stop-hook timeout (10000), so bkit bounds the
+  read before either outer timeout can fire.
+- **Out of scope (justified)**: `scripts/lint-skill-md.js` uses `fs.readFileSync(0)`
+  to read a markdown file via stdin redirect (a CI/dev tool, not a runtime hook, not
+  a held-open pipe) — not vulnerable, left unchanged. Making the Stop sub-handlers
+  fire-and-forget was unnecessary: the confirmed cause is stdin blocking, not
+  sub-handler cost (normal run 0.19 s).
+- **Verification**: new 16-TC regression test
+  `test/regression/issue-139-stdin-bounded.test.js` (parse-early return, contract
+  preservation, hard-timeout bounding, prompt process exit, source guards);
+  end-to-end proof against real subprocesses with a held-open pipe (Stop hook
+  ~374 ms vs an 8 s held pipe; no-data hard cap ~2.4 s); live `claude -p
+  --plugin-dir .` on CC v2.1.208; full CI gate suite green (contract L1/L4 222+243,
+  l2-smoke 105, l2-hook-attribution 13, l3-mcp 92+48, integration-runtime 23,
+  invocation-inventory 213, hooks-22 25, bkit-full-system 36, deadcode 0-new,
+  validate-plugin 0-err); **0 new regressions** vs the `main` baseline.
+- **Architecture counts invariant**: 44 Skills · 34 Agents · 22 Hook Events / 25
+  blocks · 195 Lib Modules — unchanged (internal changes to existing modules).
 
-### Architecture Decision Records
+## [2.1.29] - 2026-07-06
 
-- **ADR 0012** (신규) — Sprint Stop Hook Output Enforcement: (D1) run-export 패턴(bare-require no-op 회피, 필요조건), (D2) PDCA 와 별도 sprint shape, (D3) usecase 순수성 DI, (D5) **cross-process active-skill 마커**(detectActiveSkill 4경로 전멸 우회 — 충분조건). #93/v2.1.16 + ADR 0011 선례 계승.
+> **Status**: Issue #137 (@hslee-cmyk) — a low-priority, cosmetic follow-up in the
+> same task-lifecycle area as #132/#135, reported with a full reproduction. The
+> `pdca` skill chains phase Tasks with `blockedBy` (`[Plan]→[Design]→[Do]→[Check]→…`),
+> but `skills/pdca/SKILL.md` documented Task *creation* only — no step ever told the
+> model to mark the *predecessor* phase Task `completed` when advancing, and no
+> hook/orchestrator did it either. A predecessor left `in_progress` (e.g. `[Design]`
+> during the whole `Do` phase) leaked a stale phase into Claude Code's ambient
+> prompt context on every turn, disagreeing with `.bkit/state/pdca-status.json`'s
+> `phase` field — the phase source of truth, which was correct throughout. No
+> Guessing: reproduced in-source (grep confirms zero predecessor-completion
+> instructions) and the fix strategy was decided against CC's documented hook
+> constraints, not assumptions.
+
+### PDCA Predecessor-Task Completion Chain (Issue #137)
+
+- **Root cause**: `## Task Integration` and each per-action step block in
+  `skills/pdca/SKILL.md` describe creating `[Phase] {feature}` Tasks with a
+  `blockedBy` reference to the prior phase, but never instruct completing that prior
+  Task. For a `blockedBy` chain to be semantically correct — and, more visibly, to
+  keep Claude Code's native task list (surfaced into prompt context each turn)
+  consistent with `pdca-status.json` — the predecessor must be `completed` by the
+  time the successor is created.
+- **Why the issue's Option 2 (hook auto-complete) was rejected as infeasible**:
+  per the official Claude Code hooks guide, command hooks communicate only through
+  stdout / stderr / exit codes / `additionalContext` and **cannot call `TaskUpdate`
+  or any tool — only the model can**. `TaskCreated`/`TaskCompleted` are real firing
+  events, but a handler for them could at most emit a reminder, which *still* relies
+  on the model performing the completion — no more deterministic than an explicit
+  skill step, and noisier. Option 2 is therefore strictly worse than Option 1.
+- **Fix (Option 1 — deterministic, model-executed)**: each advancing `pdca` phase
+  action (`design`, `do`, `analyze`, `iterate`, `qa`, `report`) now embeds a
+  **"Complete predecessor Task first"** step immediately before its Create-Task
+  step, and `archive` completes the terminal `[Report]` Task. A general
+  **Phase Transition Rule** in `## Task Integration` states the rule ("mark every
+  prior `[Phase] {feature}` Task still `in_progress` as `completed`") and its
+  two-sources-of-truth rationale; the wording is branch-safe for the `qa`/`act`
+  parts of the 9-phase lifecycle. Uses the `TaskList`/`TaskUpdate` tools the skill
+  already grants — no new runtime surface, no hook change.
+- **Scope**: `skills/pdca/SKILL.md` only. Related skills carry no multi-phase
+  `blockedBy` chain — `plan-plus` creates a single `[Plan]` Task (completed by
+  `pdca design`'s new step), `cc-version-analysis` uses a single Task with subtask
+  tracking, and `sprint` uses per-feature Tasks — so none required changes.
+- **Regression guard**: new `test/regression/issue-137-predecessor-task-completion.test.js`
+  (25 assertions) asserts the Phase Transition Rule and each per-transition
+  completion instruction are present; it fails if any is removed.
+- **No architecture-count or runtime-behavior change**: 44 Skills / 34 Agents /
+  22 Hook Events (25 blocks) / 195 Lib Modules unchanged; `TaskCreated`/`TaskCompleted`
+  audit + auto-advance handlers unchanged. Zero new regressions vs the `main`
+  baseline (identical failing-file set).
+
+## [2.1.28] - 2026-07-03
+
+> **Status**: Issue #135 (@hslee-cmyk) — the direct, narrower follow-up to #132.
+> #132 (v2.1.27) made the audit / task-tagging half of the `UserPromptExpansion`
+> mechanism reachable for native slash commands. #135 is the remaining gap: the
+> **next-step guidance-text half** of that same mechanism never fired for
+> multi-action router skills, because `orchestrateSkillPost()` derived
+> `suggestions` ONLY from two STATIC SKILL.md frontmatter fields (`next-skill:`,
+> `pdca-phase:`), and bkit's flagship routers `pdca` and `sprint` (plus 9 utility
+> routers) declare both `null` by design — their effective phase depends on the
+> runtime `action` argument, not the skill name. Result: `suggestions = {}`,
+> `formatGuidance()` returned `''`, and the two most-used skills silently emitted
+> no "what should I run next" guidance. No Guessing: root cause confirmed at code
+> + runtime level (`orchestrateSkillPost('pdca', …)` → `{}`) and against a
+> main-baseline regression diff (0 regressions).
+
+### Runtime-Phase-Aware Skill Guidance (Issue #135)
+
+- **Root fix — runtime phase resolution, SSoT-unified**: a new source-agnostic
+  module `lib/orchestrator/runtime-guidance.js` resolves the effective phase at
+  CALL TIME from the invocation `action` cross-referenced with live PDCA/Sprint
+  state, then reuses the SAME source-of-truth the MANUAL `/pdca next` &
+  `/sprint phase` paths use — closing the issue's deeper complaint that the
+  passive-guidance path and the manual path were two disconnected systems. No
+  phase-transition table is duplicated:
+  - **PDCA** → `lib/pdca/automation.getNextPdcaActionAfterCompletion` (already
+    live-status aware: `check → qa|act` by matchRate, `qa → report|act` by
+    qaPassRate).
+  - **Sprint** → `lib/sprint/executive-summary.buildNextActions` (phase → next
+    `/sprint` command), phase read from the sprint index SSoT.
+- **Wired at the shared chokepoint**: `runSkillInvocationEffects`
+  (`skill-invocation-effects.js`) enriches the empty `suggestions` from
+  `orchestrateSkillPost` — so BOTH the `PostToolUse:Skill` (model) and
+  `UserPromptExpansion` (slash) paths surface the guidance from one change.
+  `orchestrateSkillPost` stays a pure frontmatter resolver (no layering
+  inversion). Guarded (runs only when frontmatter produced nothing AND the skill
+  is guidance-eligible) and **fail-open** (any error → `{}`, never blocks a
+  command).
+- **Judicious scope**: only the two flagship orchestrators (`pdca`, `sprint`)
+  are guidance-eligible. The 9 pure-utility routers (`audit`, `control`,
+  `rollback`, `bkit-evals`, `bkit-explore`, `claude-code-learning`, `pdca-batch`,
+  `pdca-fast-track`, `pdca-watch`) have no linear "next PDCA step" — their
+  silence is correct behavior, now explicit rather than accidental.
+- **suggestedAgent coverage** extended as a superset of the existing hardcoded
+  pair (`do → gap-detector`, `check → pdca-iterator` preserved verbatim) with
+  additive `design → design-validator`, `qa → qa-lead`.
+- **i18n cleanup (related area)**: guidance strings that were previously
+  hardcoded in Korean (`getNextStepMessage`, the `do`/`check` `suggestedMessage`)
+  are now **English-default with a KO sibling**, resolved via the existing i18n
+  detector (`lib/i18n/detector.readLanguage`). New code is English per project
+  convention; KO users keep parity. The error-focused `assets/error-dict.*.json`
+  is untouched.
+- **Tests**: new `test/regression/issue-135-multiaction-guidance.test.js`
+  (23 TC — root-cause guard, pdca/sprint resolution, utility silence, ineligible
+  skip, fail-open, SSoT-reuse guard, EN/KO parity, e2e on both paths);
+  `test/unit/skill-orchestrator.test.js` SO-023..028 migrated KO→EN (46/46).
+  Non-regression: `issue-132-slash-reach` 7/7, `skill-invocation-effects` 5/5.
+  Real production-entrypoint QA (`--plugin-dir .`) confirms guidance now appears
+  for `/bkit:pdca` and `/bkit:sprint` on both invocation paths. Main-baseline
+  regression diff: **0 regressions** (2003 PASS / 40 pre-existing FAIL unchanged).
+- **Architecture**: 195 Lib Modules (194 + `runtime-guidance.js`). No version
+  floor bump; no gated-count change (skills 44 / agents 34 / hookEvents 22 /
+  hookBlocks 25 unchanged).
+
+## [2.1.27] - 2026-07-02
+
+> **Status**: Issue #132 (@hslee-cmyk) — bkit's orchestrator side-effects
+> (next-skill/agent guidance, hook-level phase auto-advance, decision-trace
+> `phase_transition`, audit `skill_executed`) were wired ONLY to
+> `PostToolUse:Skill`, which never fires on native slash commands
+> (`/bkit:pdca ...`) — the ONLY invocation form bkit's docs teach. So for
+> essentially all real usage the advertised AI-transparency audit trail was
+> empty, decision-trace had no records, and no orchestrator guidance appeared.
+> Same root-cause family as #125/#126; #126 fixed the false warning but left
+> the functionality dead. Root cause confirmed 4 ways (code + headless repro +
+> reporter repro + `UserPromptExpansion` payload reproduction); basis in
+> `.bkit/research/issue-132-*.md`. No Guessing: the fix is grounded in an
+> empirical CC v2.1.198 reproduction of the `UserPromptExpansion` event.
+
+### Slash-Path Orchestration Restored (ENH-371)
+
+- **Root fix — dual-wire to `UserPromptExpansion`**: bkit's four orchestrator
+  side-effects are extracted into a source-agnostic shared module
+  `lib/orchestrator/skill-invocation-effects.js` and fired from BOTH the
+  existing `PostToolUse:Skill` path (model-invoked) AND a NEW
+  `UserPromptExpansion` hook (native slash path). `UserPromptExpansion` is
+  CC's purpose-built slash-command-expansion event — empirically confirmed
+  firing on CC v2.1.198 with `command_source:"plugin"`, namespaced
+  `command_name:"bkit:pdca"`, and `command_args` — and self-filters (fires
+  only for command expansions, never plain text). The handler filters to
+  `command_source==='plugin'` + a resolvable bkit skill, is **fail-open**
+  (any error → exit 0; never blocks the user's command), and injects
+  next-skill guidance via stdout (the `UserPromptExpansion` context contract).
+- **Audit semantics**: the slash/pre-execution path records a new
+  **`skill_invoked`** audit action (via the audit-logger pass-through path,
+  the same mechanism `skill_executed` already uses — `ACTION_TYPES` untouched);
+  the model-invoked `Skill`-tool path keeps `skill_executed`. A content-derived
+  dedup key (`session_id:skill:action:feature`, derivable from both payloads)
+  prevents any double-record; the two paths are normally mutually exclusive
+  per invocation.
+- **Hook inventory**: `hooks.json` gains the `UserPromptExpansion` event
+  (HPQ-quoted); the L5 invocation-inventory invariant moves **21→22 events /
+  24→25 blocks** in lockstep (`docs-code-invariants.js` SoT +
+  `EXPECTED_HOOK_EVENT_NAMES` + `invocation-inventory.test.js` +
+  `l2-smoke.test.js`). `PostToolUse` stays 3 / `PreToolUse` stays 2.
+- **Two latent defects repaid for free**:
+  - **IntentRouter was 100% dead code** — `user-prompt-handler.js` called
+    `route(prompt, { onboarding: onboardingContext })` with an undefined
+    `onboardingContext`, throwing a swallowed `ReferenceError` so structured
+    suggestions were always `[]`. Fixed; the intent-router slash regex is also
+    widened (`[\w-]` → `[\w:-]`) so bkit's own namespaced `/bkit:pdca` commands
+    are recognized.
+  - **Stop-handler dispatch was silently broken on the slash path** — the
+    active-skill marker was written only from `skill-post.js` (dead on slash),
+    so `unified-stop.js` `SKILL_HANDLERS` never dispatched for any non-sprint
+    slash-invoked skill. The shared module now writes the marker on both paths.
+- **Graceful degradation**: on CC versions without `UserPromptExpansion` the
+  new hook is simply inert (= current behavior) — no regression, no floor bump.
+  Reachability canary integrity preserved (the `skill_post` key is NOT stamped
+  from the new path, keeping the #57317/#126 monitor meaningful).
+- **Verification**: gap analysis + QA + a live `claude -p "/bkit:pdca status"
+  --plugin-dir .` probe confirming a real `skill_invoked` audit entry is
+  written on the native slash path; full CI-mirror suite green
+  (invocation-inventory 22/25, l2-smoke, HPQ, docs-code-sync, bkit-full-system,
+  validate-plugin --strict); contract baselines byte-identical (no agent/model
+  change). New tests: `skill-invocation-effects`, `user-prompt-expansion-handler`,
+  `issue-132-slash-reach`.
+- **Contract-runner alignment (no baseline edit)**: adding a hook event exposed
+  that `runL1Hooks()` was the *only* L1 surface using strict count-equality
+  against the frozen baselines — `runL1Skills/Agents/MCP` all guard by
+  per-identity existence and tolerate additions (proof: baseline v2.1.9 declares
+  39 skills / 36 agents while HEAD ships 44 / 34, yet L1 passes). Per the
+  rollforward guide §3.1 (the LTS baseline is edited only at a major LTS
+  transition, never for a routine surface addition), the fundamental fix is in
+  the *runner*, not the snapshots: the hook events/blocks count asserts move
+  `=== ` → `>=` (additions OK; the pre-existing per-event existence loop remains
+  the real removal guard; a net count *decrease* still fails). Both CI compares
+  (`--compare v2.1.9` and `--compare v2.1.16`, `--level L1,L4`) pass with the
+  frozen baselines untouched.
+
+## [2.1.26] - 2026-07-02
+
+> **Status**: Issue Response + v2.1.25 follow-up closure. MAIN: the `/plugin`
+> "Needs attention: bkit-pdca / bkit-analysis MCP ✗ failed" defect is fixed at
+> its structural root. Empirical reproduction (R1,
+> `.bkit/research/v2126-reproduction-log.md`): the repo-root `.mcp.json` was
+> loaded TWICE by Claude Code — as the plugin's MCP manifest
+> (`${CLAUDE_PLUGIN_ROOT}` expands, `plugin:bkit:*` ✔ Connected) AND as
+> project-scope shared config whenever the bkit checkout is the working
+> directory, where the variable is undefined → CC diagnostics "Missing
+> environment variables: CLAUDE_PLUGIN_ROOT" → bare entries pending/failed.
+> Marketplace end-users are unaffected; developers and cloners get a clean
+> `/plugin` panel and `claude mcp list`.
+
+### Fable Cost Retune — high-frequency verifiers fable→opus (ENH-370)
+
+- **Problem**: v2.1.25 pinned all 9 verification/orchestration agents to Claude
+  Fable 5 ($10/$50 per MTok). But the two verifiers that run MOST often —
+  `gap-detector` (every `/pdca analyze` **and** re-run inside every iterate
+  cycle) and `pdca-iterator` (up to 5 cycles per feature) — form a repeated
+  Check→iterate loop: a single feature can invoke `gap-detector` up to 6× and
+  `pdca-iterator` up to 5×, all on the most expensive model. Continuous use
+  drove token cost up sharply (user-reported).
+- **Change**: the 3 high-frequency PDCA verifiers **`gap-detector`,
+  `design-validator`, `pdca-iterator` move `fable` → `opus`** (Opus 4.8 —
+  $5/$25, **half Fable's cost**, and strong at verification; it was their model
+  before v2.1.25). Fable stays on the 6 long-horizon agents where its
+  planning/delegation/self-checking edge compounds and invocation is
+  user-initiated + infrequent: `cto-lead`, `sprint-orchestrator`,
+  `sprint-master-planner`, `pm-lead`, `qa-lead`, `sprint-qa-flow`.
+- **Matrix**: fable 9→**6** / opus 7→**10** / sonnet 16 / haiku 2 (34 agents).
+  Lockstep: `agents/{gap-detector,design-validator,pdca-iterator}.md` +
+  contract baselines both dirs (model field only, 6 JSONs) + SEC-AF-038/052
+  comments (lists unchanged — opus stays a premium model, so the read-only
+  premium exceptions remain valid) + docs (commands/bkit.md, bkit-system
+  overview/README/philosophy tables, README architecture line). Pricing table
+  and `token-report` unchanged (both models already priced). Also fixed a stale
+  `context-engineering.md` haiku row (8 → 2; the 6 pdca-eval-* tombstones were
+  removed in v2.1.25 per ADR 0014).
+
+### MAIN — MCP manifest relocation (ENH-369)
+
+- **`mcpServers` is now declared INLINE in `.claude-plugin/plugin.json`**
+  (official manifest key, documented alternative to root `.mcp.json`; values
+  byte-equal — same 2 servers, same `${CLAUDE_PLUGIN_ROOT}` args). The root
+  `.mcp.json` file is **deleted**: only that literal filename at the project
+  root is auto-loaded as project config, so the dual-load collision is
+  structurally impossible now.
+- Regression locks: `test/integration/mcp-server.test.js` re-pointed at the
+  manifest (MS-011~015) + NEW args-hardening assertion
+  (`${CLAUDE_PLUGIN_ROOT}/servers/` must appear — previously unasserted) +
+  NEW **MS-016**: the repo root must never contain `.mcp.json` again.
+- Live acceptance evidence: repo-cwd `claude mcp list` shows zero bare
+  bkit entries + zero MCP diagnostics; fresh `--plugin-dir .` session loads
+  the inline manifest and `bkit_pdca_status` returns valid JSON;
+  `claude plugin validate . --strict` 0 errors / 0 warnings. Rejected
+  alternatives (documented): `${VAR:-default}` (silences the parse error but
+  still registers a broken/duplicate server) and relative `./servers/...`
+  args (breaks every marketplace install — plugin docs mandate
+  `${CLAUDE_PLUGIN_ROOT}`).
+
+### Release tooling — `claude plugin tag` drift (F1)
+
+- `scripts/release-plugin-tag.sh` step 6: CC (~v2.1.110) changed
+  `plugin tag` to derive `{name}--v{version}` from plugin.json (positional
+  version argument removed → the old `claude plugin tag vX.Y.Z` call failed
+  with "Path not found"; the derived `bkit--vX.Y.Z` format would also break
+  this repo's `vX.Y.Z` tag continuity). The release tag is now ALWAYS created
+  via `git tag -a`; `claude plugin tag . --dry-run` is retained as an
+  INFORMATIONAL consistency check only (plugin.json↔marketplace agreement;
+  never gates, `|| true` pipefail-safe). Verified end-to-end on a clean
+  clone: full `--dry-run` EXIT=0. `lib/infra/cc-version-checker.js`
+  `pluginTagCommand` comment records the transition (value stays 2.1.118 —
+  the map documents the minimum CC where the invoked command exists).
+
+### Test-state isolation — tests no longer write the real `.bkit` (F4)
+
+- Root causes found by call-chain tracing (No Guessing): the sprint dispatcher
+  built infra from `args` while tests injected `projectRoot` via `deps`
+  (`scripts/sprint-handler.js`), `active-skill-marker` hardcoded the real
+  root, and the telemetry adapter + 9 direct `writeAuditLog` sites discarded
+  the injected root before reaching `lib/audit/audit-logger.js`.
+- ADDITIVE injection (defaults byte-for-byte preserved): `projectRoot` now
+  threads through `lib/pdca/batch-orchestrator.js` (was hardcoded),
+  `scripts/sprint-handler.js` → `lib/infra/sprint/*` → sprint state/registry,
+  `lib/audit/audit-logger.js`, and `lib/core/active-skill-marker.js`.
+- 5 leaking suites converted to tmp-root isolation (sprint-handler
+  default-level-warning + annotate-action, config-sync, module-chain,
+  batch-orchestrator) — all assertions preserved. NEW guard:
+  `test/regression/bkit-state-isolation.test.js` (22 TC) proves injected
+  writes land only under tmp AND the real `.bkit` hash is byte-identical
+  across the 5 suites. Additional real-`.bkit`-writing suites are inventoried
+  in the Do report as follow-up candidates (l2-smoke by design, e2e suites).
+- Local `.bkit` fixture pollution (sc05-test, test-f1-*, test-feature-*,
+  batch fixtures — accumulated by the pre-fix leaks) cleaned locally;
+  procedure: remove fixture features via `deleteFeatureFromStatus`, delete
+  fixture sprint/registry/batch files, verify `/pdca status` + MCP healthy.
+
+### Governance & docs (F2, F3, ADR 0011, 45-skills)
+
+- **ADR 0015** (bilingual): locale-scoped trigger generation (#129 proposal 1)
+  formally DEFERRED — CC plugins are immutable versioned marketplace
+  checkouts with no install-time generation hook; bkit's 8-language routing
+  lives in `lib/intent/language.js`, not descriptions. Revisit if CC gains
+  install/setup hooks.
+- **ADR 0011 Amendment 1**: official manifest schema has grown past the
+  21-key v2.1.143 snapshot (mcpServers — now used by bkit — lspServers,
+  channels, userConfig, defaultEnabled). Policy recorded verbatim:
+  `EXPECTED_PLUGIN_JSON_KEYS` is **subset enforcement — the keys bkit ships —
+  NOT a mirror of the full official schema** (only absent official key:
+  `defaultEnabled`, which bkit does not ship). Zero code change.
+- **Eval re-baseline SOP** (bilingual, `docs/06-guide/eval-rebaseline.guide.*`):
+  `model_baseline` is capture-time metadata (the eval runner performs ZERO
+  LLM calls); re-baseline on rubric changes, not model releases; the current
+  32 `claude-sonnet-4-6` values remain frozen per the v2.1.25 decision.
+- **45-skills counting note** (CUSTOMIZATION-GUIDE + skills overview): CC's
+  `/plugin` Skills count = `skills/` + `commands/` entries (same-name dedup);
+  bkit = 44 skills + `commands/output-style-setup.md` → displays 45. Not a bug.
+
+## [2.1.25] - 2026-07-02
+
+> **Status**: Claude 5 Model Alignment + Issue Response (#128, #129, #130).
+> Realigns all 40 agent model pins to a
+> 4-tier role-based matrix built around the Claude 5 family (Fable 5 / Opus 4.8 /
+> Sonnet 5 / Haiku 4.5), with a **dual-floor** compatibility policy: the install
+> floor stays at CC v2.1.143 (unchanged — plugin-manifest `displayName`), and a
+> new **model floor** (CC v2.1.170, where the `fable` alias was introduced) is
+> surfaced as a SessionStart advisory (**ENH-368**) instead of a hard requirement.
+> Every dependent surface moved in lockstep: frontmatter, runtime whitelist,
+> pricing, contract baselines, security assertions, and docs. Design doc:
+> `docs/02-design/features/claude-model-alignment.design.en.md`. Basis: two
+> empirical reproductions — **R1** (alias resolution per CC version/provider) and
+> **R2** (`model: fable` is a HARD agent-spawn error on CC < 2.1.170) — logged in
+> `.bkit/research/v2125-reproduction-log.md`. No Guessing: every tier assignment
+> argued per-agent; pricing verified against published Claude API list prices.
+
+### 4-Tier Model Matrix (16 reassignments across 40 agents)
+
+| Tier | Count | Agents | Rationale |
+|------|:-----:|--------|-----------|
+| **fable** (was opus ×9) | 9 | cto-lead, sprint-orchestrator, sprint-master-planner, pm-lead, qa-lead, gap-detector, design-validator, pdca-iterator, sprint-qa-flow | Verification & orchestration core — long-horizon leads + design/gap verifiers, Fable's exact positioning (honesty/verification edge, long-horizon self-checking) |
+| **opus** (unchanged ×7) | 7 | security-architect, code-analyzer, self-healing, infra-architect, enterprise-expert, bkit-impact-analyst, cc-version-researcher | Opus 4.8 strongest on cybersecurity; refusal-sensitive headless paths (self-healing is Sentry/Slack-triggered; Fable's safety classifier reroutes/refuses security-adjacent + non-interactive work); deep single-shot analysis at half Fable cost |
+| **sonnet** (1 changed) | 16 | sprint-report-writer (**opus → sonnet** — KPI aggregation/report synthesis is implementation-class work) + 15 unchanged implementers/analysts | Coding, analysis, synthesis workers; `sonnet` alias floats to Sonnet 5 on CC ≥ 2.1.197 |
+| **haiku** (6 changed) | 8 | pdca-eval-{act,check,design,do,plan,pm} (**sonnet → haiku** — DEPRECATED tombstones, never spawned by design, minimum cost if accidentally spawned) + qa-monitor, report-generator (unchanged) | High-volume, low-reasoning monitors + tombstones |
+
+Distribution at matrix time: 40 files = 9 fable / 7 opus / 16 sonnet / 8 haiku.
+**Final tree** (after #128 removed the 6 deprecated tombstone files — see Issue
+Response below): **34 agent files = 9 fable / 7 opus / 16 sonnet / 2 haiku**.
+
+### Dual Floor + ENH-368 Model-Floor Advisory
+
+- **Install floor UNCHANGED**: CC v2.1.143 (`CC_MIN_VERSION` — plugin-manifest
+  `displayName`, unrelated to model capability). Runtime minimum unchanged
+  (`MIN_VERSION` 2.1.78).
+- **NEW — model floor constant**: `FABLE_MODEL_FLOOR = '2.1.170'` exported from
+  `lib/infra/cc-version-checker.js` (single constant, infra layer).
+- **NEW — ENH-368 SessionStart advisory** (`hooks/startup/session-context.js`):
+  when `2.1.143 ≤ CC < 2.1.170`, names the 9 fable-pinned agents (they hard-fail
+  at spawn on those binaries, per R2), the required CC version, the fix
+  (`npm install -g @anthropic-ai/claude-code@latest`), and the temporary
+  workaround `export CLAUDE_CODE_SUBAGENT_MODEL=sonnet` (forces ALL subagents to
+  sonnet). At most one advisory is emitted (install-floor advisory takes
+  precedence); reuses the single `detectCCVersion()` result — no second process
+  spawn. Fail-open: never blocks SessionStart.
+- `RECOMMENDED_VERSION` **2.1.150 → 2.1.198** (Claude 5 alias resolution —
+  `sonnet` resolves to Sonnet 5 only on CC ≥ 2.1.197); stale SessionStart
+  recommendation prose (`v2.1.123+/v2.1.140/v2.1.34~141`) replaced with the
+  current dual-floor recommendation.
+
+### Pricing & Model-Classing Sync (`lib/pdca/token-report.js` — pricing SoT)
+
+- **FIX — opus pricing was 3x stale**: `PRICING_PER_MTOK.opus` 15/75 → **$5/$25**
+  per MTok (Opus 4.8 published list price) — cost dashboards previously
+  overstated opus spend 3x.
+- **FIX — haiku pricing**: 0.25/1.25 → **$1/$5** (Haiku 4.5 published list price).
+- **NEW — fable pricing**: **$10/$50** added; `_modelClass()` gains an
+  `includes('fable') → 'fable'` branch. `sonnet` 3/15 and `unknown` 3/15
+  fallback unchanged.
+- `test/unit/token-report.test.js`: opus assertion corrected to 5/25; NEW fable
+  pricing test + classing tests (`claude-fable-5`→fable, `claude-sonnet-5`→sonnet,
+  `claude-opus-4-8`→opus); unknown-fallback test still passes.
+
+### Whitelists, Baselines & Security Assertions (lockstep)
+
+- `test/security/agent-frontmatter.test.js` `VALID_MODELS` += `'fable'`
+  (typo'd models still fail the strict whitelist).
+- `scripts/subagent-start-handler.js` runtime coercion whitelist += `'fable'`;
+  team default ctoAgent `'opus'` → `'fable'` (also `lib/team/state-writer.js`,
+  `hooks/session-start.js` — follows cto-lead frontmatter; teammate default
+  stays `sonnet`).
+- Contract baselines regenerated via `contract-baseline-collect.js` for both
+  dirs (`test/contract/baseline/v2.1.9/` + `v2.1.16/`) — **28 baseline JSONs**,
+  `model` field only (L1-AG lockstep, no other field churn).
+- Security assertions updated: SEC-AF-030 (`cto-lead` opus → fable), SEC-AF-038
+  (OPUS_TIER1 generalized to PREMIUM tier = opus|fable: security-architect,
+  design-validator, gap-detector), SEC-AF-037 (deprecation tombstones with
+  minimal frontmatter skipped), read-only premium exceptions per matrix.
+- `evals/config.json` `benchmarkModel`: `claude-sonnet-4-6` → `claude-sonnet-5`.
+  Note: `evals/*/eval.yaml` `model_baseline` values are **historical capture
+  records** — intentionally unchanged.
+- `lib/domain/guards/enh-264-token-threshold.js`: `KNOWN_REGRESSION_MODELS` kept
+  at sonnet-4.x only + explicit comment — the ENH-264 regression was
+  sonnet-4.x-specific; Sonnet 5 excluded until observed evidence (No Guessing).
+
+### Docs=Code — 3 Pre-existing Drift Bugs Fixed
+
+- **FIX — `commands/bkit.md` agent header said "36 total — 13 opus / 21 sonnet /
+  2 haiku"**: actual tree has 40 agent files; now "40 total — 9 fable / 7 opus /
+  16 sonnet / 8 haiku" with every per-agent model row verified against frontmatter.
+- **FIX — pm-lead listed as `sonnet`** in `commands/bkit.md` +
+  `bkit-system/components/agents/_agents-overview.md`: pm-lead was opus before
+  this release (drift predating the matrix) and is now `fable`.
+- **FIX — test-checklist PM-T10** claimed "All 5 PM agents use sonnet": now
+  "pm-lead uses fable; pm-discovery/pm-strategy/pm-research/pm-prd use sonnet".
+- All other normative model surfaces synced: `bkit-system/README.md` counts,
+  `_agents-overview.md` 4-tier legend + tables, `philosophy/context-engineering.md`
+  + `ai-native-principles.md` model tables, `scenario-new-feature.md`,
+  `skills/{pdca,pm-discovery,cc-version-analysis}/SKILL.md`,
+  `CUSTOMIZATION-GUIDE.md` (fable allowed value + CC ≥ v2.1.170 note + `model:
+  fable` example + model-selection footguns), `README.md` runtime recommendation
+  + 4-tier matrix line, `README-FULL.md` mermaid diagrams + example model IDs
+  (`claude-opus-4-8`, `claude-sonnet-5`), `marketplace.json` description.
+  Historical entries/notes (e.g., ENH-325 "17 opus agents", regression-history
+  prose) intentionally untouched.
+
+### Issue Response — #128 / #129 / #130
+
+- **#128 (@NEXCODE-MK) — Deprecated `pdca-eval-*` stubs removed from the prompt
+  surface (ADR 0014)**: the 6 tombstone files (~1,387B of always-resident agent
+  descriptions + accidentally-spawnable "(Tools: All tools)" entries) are
+  **deleted from `agents/`**; deprecation governance moves to a machine-readable
+  registry at `test/contract/deprecation-registry.json` (deprecatedIn /
+  replacedBy / reason / deprecationCommit / stubRemovedIn / issue). Contract L4
+  accepts a registry tombstone as equivalent to a live stub
+  (`contract-test-run.js` `loadDeprecationRegistry()`, fixture-overridable; the
+  `missing-stub` fixture still fails — and a pre-existing exit-2 crash in that
+  path was fixed). L5 invocation-inventory asserts registry⇔SoT equality and
+  that no stub files remain (212 TC). Baseline JSONs in **both** dirs untouched.
+  **ADR 0014** ("Deprecation Registry — tombstones off the prompt surface",
+  bilingual) supersedes the ENH-336 (v2.1.22) permanent-retention decision on
+  its own terms — both of its premises (L4 breakage, baseline mutation) are
+  dissolved by the registry; rollforward guide gains §5.6. Side fix: 6
+  pre-existing `agents-effort` failures (AE-09..14) eliminated.
+- **#129 (@NEXCODE-MK) — Token diet: compact 8-language trigger encoding**:
+  agent frontmatter descriptions compacted **30,065B → 16,919B (−44%)** across
+  32 agents + `skills/sprint/SKILL.md` (1,074B → 550B) — an estimated
+  **~4.5–5.3K tokens saved per session wakeup** for every bkit user. New
+  template: 1–2 role sentences + one "Use proactively when…" sentence + a
+  single `Triggers:` block (full EN + full KO lists + exactly one anchor per
+  JA/ZH/ES/FR/DE/IT). "Do NOT use for" + version notes moved into agent bodies
+  (`## When NOT to use this agent`, `## Delegation notes`) — loaded only on
+  invocation, so no information was deleted. bkit's own 8-language routing is
+  unaffected (it reads the separate `lib/intent/language.js` registry, not
+  descriptions — verified file:line); contract baselines don't capture
+  description content, so **no baseline regen**. New regression lock:
+  `test/regression/issue-129-description-budget.test.js` (≤700B per agent
+  description, `Triggers:` presence, ≤20,000B total). Locale-scoped generation
+  (issue proposal 1) deferred: CC plugins are read-only marketplace checkouts —
+  no install-time file generation exists (to be documented in a follow-up ADR).
+- **#130 (@s99606931) — `learning-stop.js` dead `isTTY === false` stdin gate**:
+  piped hook stdin has `isTTY === undefined`, so the gate silently skipped
+  input (reproduced: payload `learn 3` returned level 1). Fixed with the shared
+  `readStdinSync()` helper per the #125/#126 precedent (commit 7b780b8), same
+  anti-pattern warning comment; args coerced to string. New regression test
+  `test/regression/issue-130-learning-stop-stdin.test.js` (9 TC: piped payload,
+  top-level, empty/malformed stdin fallback, non-string args). Repo-wide sweep:
+  zero `isTTY === false` code gates remain (stdout truthiness check in
+  `lib/ui/ansi.js` is correct and kept).
+
+### Footguns (documented, no bkit code)
+
+- **`CLAUDE_CODE_SUBAGENT_MODEL` overrides ALL frontmatter model pins** — while
+  set, every subagent (including the 9 fable pins) runs on that model. It is the
+  documented below-floor workaround; unset it after upgrading CC.
+- **Enterprise `availableModels` exclusions fall back silently**: an excluded
+  model does not error — the agent inherits the main conversation model.
+- **Fable safety-classifier headless refusals**: Fable may reroute/refuse
+  security-adjacent or non-interactive (`claude -p`) work — the reason
+  security-architect / code-analyzer / self-healing stay opus, and QA probes use
+  innocuous prompts.
+- **Provider alias table (R1)** — bkit makes NO universal "Sonnet 5" promise;
+  AWS/Bedrock/Vertex aliases resolve to older models:
+
+  | Provider path | `fable` | `opus` | `sonnet` |
+  |---|---|---|---|
+  | Anthropic API (CC ≥ 2.1.197) | Fable 5 (CC ≥ 2.1.170) | Opus 4.8 | Sonnet 5 |
+  | Claude Platform on AWS | provider-specific full ID required | Opus 4.7 | Sonnet 4.6 |
+  | Bedrock / Vertex / Foundry | provider-specific full ID required | Opus 4.6 | Sonnet 4.5 |
+
+## [2.1.24] - 2026-07-01 (branch: `fix/skill-namespace-hook-reachability-125-126`)
+
+> **Status**: Skill-orchestration namespace hardening. Fixes two related
+> skill-hook defects reported by external dogfooder **[@hslee-cmyk](https://github.com/hslee-cmyk)**
+> (GitHub #125 + #126, filed together during one investigation) plus every
+> same-root-cause site found by mapping the fix's blast radius (no whack-a-mole).
+> Root cause for both: Claude Code invokes plugin skills via the fully-qualified
+> `plugin:skill` form (e.g. `bkit:pdca`), but bkit resolves skills by their bare
+> on-disk folder name (`skills/pdca/`). Both reproductions were confirmed
+> directly (namespaced `getSkillConfig` → `null`; live SessionStart false-positive
+> `missing=[skill_post]`) before any fix. Every fix is guarded by new unit tests
+> and the full Invocation Contract CI gate stays green.
+
+### #125 — namespaced skill names silently lose next-skill / pdca-phase guidance
+
+- **FIX — `getSkillConfig()` resolved `skills/bkit:pdca/SKILL.md` (ENOENT) → `null`**:
+  `lib/skill-orchestrator.js` built the lookup path from the raw skill identifier,
+  so any skill invoked through the CC `Skill` tool in `plugin:skill` form returned
+  a null config — `next-skill` and `pdca-phase`-driven "next step" suggestions
+  (e.g. "구현이 완료되면 Gap 분석을 실행하세요") never fired, silently and with no error.
+- **NEW — `lib/core/skill-name.js` `normalizeSkillName()`**: single source of truth
+  that canonicalizes any skill identifier (bare or namespaced) to its bare folder
+  name by stripping the `plugin:` prefix. Null-safe; a bare name is a no-op.
+  Sibling to `lib/core/name-validator.js` (which *rejects* unsafe names; this one
+  *canonicalizes*). Its output is always path-safe.
+- **FIX — same-root-cause sites hardened** (blast-radius sweep, not just the
+  reported line):
+  - `getSkillConfig` + `orchestrateSkillPre` (`lib/skill-orchestrator.js`) —
+    normalize before path/cache lookup; bare and namespaced share one cache entry.
+  - `scripts/skill-post.js` — canonicalize `tool_input.skill` once at the hook
+    boundary so config lookup, the `CODE_GENERATION_SKILLS` `/copy` list, the
+    active-skill marker, the audit target and PDCA-status update all see the bare name.
+  - `scripts/user-prompt-handler.js` — implicit-trigger template injection resolved
+    `skills/bkit:<skill>/SKILL.md` (always ENOENT, because `lib/intent/trigger.js`
+    returns the namespaced form); now normalized, so implicit template injection works.
+  - `scripts/unified-stop.js` — `SKILL_HANDLERS[activeSkill]` / `AGENT_HANDLERS`
+    dispatch and the bare `activeSkill === 'control' | 'audit' | 'development-pipeline'`
+    comparisons now canonicalize the detected name, so end-of-turn Stop handlers
+    dispatch even when the active-skill marker held the namespaced form.
+
+### #126 — hook-reachability check false-positive flags `skill_post` as dropped
+
+- **FIX — `missing=[skill_post]` "CC plugin-hook drop (#57317) suspected" fired in
+  normal usage**: the SessionStart MON-CC-NEW-PLUGIN-HOOK-DROP monitor treated a
+  missing `skill_post` stamp identically to a dropped hook. But `skill_post` only
+  fires on a `PostToolUse(Skill)` tool_use, and bkit's own documented workflow
+  invokes skills via slash commands (`/pdca plan`), which produce no Skill tool_use
+  — so `skill_post` legitimately never fires and the warning showed every session,
+  eroding trust in the check (and risking real drops being dismissed as "the usual
+  false alarm").
+- **NEW — `lib/core/hook-reachability.js` `evaluateReachability()`**: pure,
+  unit-testable classifier extracted from the inline SessionStart logic. Partitions
+  the stamps into **canaries** (`bash_post` / `write_post` — fire on nearly every
+  turn) and **event-driven** (`skill_post`). An event-driven hook is only reported
+  as a drop when a canary is *also* unhealthy — a genuine `#57317` loader drop takes
+  down all three together, so correlated failure is the reliable signal. When the
+  canaries are healthy, an absent/stale `skill_post` is suppressed as "idle". This
+  preserves the monitor's real purpose while eliminating the chronic false positive.
+- `hooks/session-start.js` now delegates to `evaluateReachability`; audit details
+  carry `canaryUnhealthy` + `skillPostIdle` for traceability.
 
 ### Tests
 
-- `test/unit/session-title.test.js` (확장 +8 TC) — 2-session DISTINCT title / clobber 후 dedup 복원 / legacy migration / sessionId 부재 tag 생략 / sessionTag 결정성.
-- `test/unit/sprint-executive-summary.test.js` (신규 28 TC) — sprint shape / PDCA shape 분리 / context override / next actions / feature 표 / formatStatusScreen.
-- `test/unit/sprint-skill-stop.test.js` (신규 20 TC) — Exec Summary 출력 / sessionTitle tag / userPrompt / read-only 미출력 / run-export / unified-stop e2e dispatch(TC-U1) / **marker 경로 production dispatch(TC-U2) / 오발동 방지(TC-U3)**.
-- `test/unit/active-skill-marker.test.js` (신규 10 TC) — write/read/consume roundtrip / TTL 만료 / 손상 JSON 방어 / consume-once.
-- `test/contract/sprint-skill-handler-registration.test.js` (신규 5 TC) — SKILL_HANDLERS sprint 엔트리 + run-export 구조 invariant.
-- `test/unit/sprint-lifecycle/advance-phase-transition-summary.test.js` (신규 11 TC) — phaseTransitionSummary DI 계약 + usecase 순수성(fs/lib-sprint import 부재) contract.
-- **총 92 신규/확장 TC** (전체 PASS). 실 `claude -p --plugin-dir .` 런타임 dispatch 검증 포함 (static check + 합성 payload 만으로는 dispatch 결함을 놓침 — [[feedback_thorough_qa]]).
+- **NEW** `test/unit/skill-name.test.js` (11 TC) — `normalizeSkillName` canonicalization + null-safety.
+- **NEW** `test/unit/hook-reachability.test.js` (11 TC) — drop-vs-idle classification across
+  the #126 repro, real-drop, partial-drop, and idle scenarios.
+- **NEW** `test/unit/skill-orchestrator.test.js` SO-042…046 — namespaced `getSkillConfig` /
+  `getAgentForAction` resolution parity + single-cache-key invariant.
+- Both new lib modules registered in `test/run-all.js` and tracked (CI `check-test-tracking`).
+
+### Credits
+
+- **[@hslee-cmyk](https://github.com/hslee-cmyk)** — precise reproductions + root-cause
+  file:line references + a suggested fix for #125, filed alongside #126 from the same
+  investigation. Reproductions absorbed as permanent regression tests.
+
+## [2.1.23] - 2026-06-23 (branch: `fixes/Sprint-System-Issues-6222026`)
+
+> **Status**: Sprint System Restore-As-Designed. Restores the Sprint quality-gate system to its original designed behavior by fixing the 5 NIM2CC-reported issues plus ~10 second-order defects found via big-picture mapping (no whack-a-mole). Artifacts: design `docs/superpowers/specs/2026-06-22-sprint-restore-as-designed-design.en.md` (+ `.ko.md`) · plan `docs/superpowers/plans/2026-06-22-sprint-restore-as-designed.md`. Delivered across 5 slices + master E2E, executed via subagent-driven-development (fresh subagent per task + two-stage spec/quality review). **Success criterion met**: a real sprint runs the full 8-phase lifecycle (`init→start→plan→design→do→iterate→qa→report→archived`) through the dispatcher with zero manual JSON editing — proven by `tests/contract/sprint-restore-e2e.test.js`.
+
+### Cluster A — Dispatcher Wiring (the root cause of the original 5 issues)
+
+- **FIX — composition root never wired adapters**: `wireAgentAdapters` (`scripts/sprint-handler.js`) received `{}` so no `agentTaskRunner` ever reached the gates/iterators. The handler layer accepted injected adapters but the composition root constructed none.
+  - Added `createTaskToolRunner(host)` host-adapter factory (`scripts/lib/sprint-handler-shared.js`) bridging the host's `invokeTaskTool` to the `({subagent_type, prompt}) => {output}` contract the domain expects.
+  - `wireAgentAdapters` now builds/threads: `gapDetector` + `autoFixer` (from `agentTaskRunner`), `dataFlowValidator` (from `mcpClient`/`staticMatrix`), `agentTaskRunner` onto `measureDeps` + `phaseDeps`, and `taskCreator` (see Cluster F-remaining). Caller-supplied deps always win.
+  - Documented the injection contract in `skills/sprint/SKILL.md`.
+
+### Cluster B — M8 Chicken-and-Egg (Issue #5)
+
+- **FIX — M8 unmeasurable at plan-exit**: at plan-exit the design doc does not yet exist, so M8 had no source artifact to measure → plan→design advance always gate-failed. `measure-router.buildPrompt` now resolves a phase-specific source: at `plan` it cites the plan doc's design section; at `design`+ it cites the Design doc §14 self-assessment checklist (via new `sourceArtifactPlanPhase` route field).
+
+### Cluster C — Feature Tracking (featureMap never populated)
+
+- **FIX — `featureMap` was always `{}`**: `createSprint` never populated it; the S2 featureCompletion gate therefore had nothing to read.
+  - Added `completion` (0-100) to the `SprintFeatureMapEntry` typedef + populated `featureMap` in `createSprint`.
+  - `handleFeature add/remove` now keeps `features[]` ↔ `featureMap` in lockstep (twin sources of truth).
+  - Phase advance bumps each entry's `pdcaPhase` + `completion` (monotonic `max`, never decreases); `handleQA` grants `completion=100` + `qa='pass'` on a data-flow pass (the only path to 100).
+
+### Cluster D — Auto-Pause Scope + S1 Persistence (Issues #3, #4)
+
+- **FIX — auto-pause only checked M3/S1**: `checkAutoPauseTriggers` (via new `failingActiveGates` helper, `lib/application/sprint-lifecycle/auto-pause.js`) now inspects **every** active gate in `ACTIVE_GATES_BY_PHASE[phase]`, so `QUALITY_GATE_FAIL` fires on any failing gate (was silently missed for M1/M2/M4/M5/M7/M8/M10/S2).
+- **FIX — `handleQA` didn't persist s1Score**: the computed S1 score was discarded → the S1 slot stayed null → advancePhase reported `not_measured` even after a successful QA. Now persisted to `qualityGates.S1_dataFlowIntegrity`.
+
+### Cluster E — Docs
+
+- **FEAT — `gate_fail` return carries an actionable hint**: names the failing gate key(s) + the exact `/sprint measure` + `/sprint phase` commands to run (advance-phase.usecase.js). Closes the Issue #93 "no user-facing signal on gate failure" gap.
+- **DOCS — reconciled to code**: corrected the `SPRINT_AUTORUN_SCOPE` Trust-Level table in `commands/bkit.md` (was L1=design/L2=do/L3=qa; code is L0/L1=prd, L2=design, L3=report, L4=archived) + folded in the "--approve does NOT bypass Quality Gate failures" warning; fixed the stale "feature sub-action deferred" claim in `skills/sprint/examples/multi-feature-sprint.md` (featureMap sync is now live).
+
+### Cluster F-gates — Gate Measurability ("no gate in limbo")
+
+> Headline outcome: `UNSUPPORTED_GATES` is now **empty** — every gate in `ACTIVE_GATES_BY_PHASE` has a route (sub-agent, computed, or `not_applicable` exemption). Verified at runtime: SUPPORTED 11 / UNSUPPORTED [] / limbo [].
+
+- **FEAT — M5 runtime error rate** (`measure-router.js`): routed to qa-monitor live-log probe; **exemptible** — when the project has no runtime logs (library/static site), the caller passes `logSourceAvailable=false` and the router returns `not_applicable` (counted as passed) instead of failing.
+- **FEAT — M10 PDCA cycle time**: computed gate = sum of `phaseHistory` durations. **Follow-up fix**: the compute originally read a never-produced `durationHours` field; corrected to read `durationMs` (what `advance-phase.appendExitToHistory` actually writes) and convert to hours.
+- **FEAT — S2 featureCompletion**: computed gate = ratio of `featureMap` entries with `completion >= threshold`. Empty featureMap → honest 0 (not vacuous 100).
+- **FEAT — S4 archiveReadiness**: computed gate = every measurable report-phase gate passed AND `sprint.docs.report` present. Shares `computeArchiveReadiness` with `archiveSprint` (the archive path populates the S4 slot before its gate check, since `evaluateGate` reads slots not compute fns).
+- **FIX — M5 exemption unreachable from the CLI**: `handleMeasure` + `runPhaseGates` never forwarded `logSourceAvailable` into the use case, so the `not_applicable` route was reachable only programmatically. Threaded `args`/`deps.logSourceAvailable` through both `ucDeps` objects (surfaces as `--no-logs`). Surfaced by the master E2E.
+- **FIX — `measure-gate.usecase` honors the exemption**: when the router asserts `passed` explicitly (M5 not_applicable), the use case honors it directly instead of re-evaluating via `evaluateGate` (which flipped exempted gates to not_measured failures).
+
+### Cluster F-state — Designed-But-Unimplemented Completion
+
+- **FEAT — `dataFlow` + `annotations` on the Sprint typedef**: declared in v2113-Sprint-5 SC-01 / v2.1.19 s1-foundation FR-5 but never added. `dataFlow` (per-feature hop-result map) now initialized in `createSprint`; `annotations` (already set at runtime) now in the typedef.
+- **FEAT — `handleQA` records per-hop results to `sprint.dataFlow[feature]`** (`{H1:{status,evidence,reason,from,to}, …}`), closing the data-flow validation loop: the Tier-2 static validator (`data-flow-validator.adapter`) already read this field but nothing populated it → a `staticMatrix` QA re-run found no matrix and failed every hop. Now probe → record → re-validate-from-record works (QA is replayable; works for archived sprints where live probing is impossible).
+- **FEAT — skip-iterate `do→qa`**: `computeNextPhase` overloaded to accept a sprint object; at `do`, inspects `M1_matchRate` and returns `qa` when target met, else `iterate`. `transitions.js` already declared the `do→qa` edge legal — it was unreachable because `computeNextPhase` was phase-only. *(Autorun-loop activation deferred — see Deferred.)*
+- **FIX — `handleWatch` ghost matrix types + require-path crash**: read `['data-flow','cumulative-state','feature-phase']` but only `data-flow` is real (the ghosts have no producer, no file, no design-doc backing). Now reads real `MATRIX_TYPES` from `sprint-paths` (the single SoT). Also removed a local `require(path.join(__dirname,'..','lib/application/...'))` that resolved to a nonexistent path and threw `MODULE_NOT_FOUND` on every call.
+- **FIX — `handleFork` same require-path crash class**: the third and final instance of the broken relative-require pattern (handleFeature fixed earlier, handleWatch above). Removed; uses the module-level `domain` import. Repo-wide grep confirms no remaining instances.
+- **FEAT — `handleMasterPlan` taskCreator wiring + emitter flush**: `generateMasterPlan` only created tracker tasks when `deps.taskCreator` was a function, but `wireAgentAdapters` never built one → master plans silently skipped tracker creation. Added `createTaskCreatorForRunner` factory (resilient — synthesizes a deterministic id on runner failure, never throws). Separately, `handleSprintAction` now best-effort flushes `infra.eventEmitter` after each action (the CLI exited without flushing, dropping buffered telemetry; flushed inside the action because `getInfra` returns a fresh non-singleton bundle per call, so a CLI-block flush would hit the wrong emitter).
+- **FIX — `handleReport` never wrote the report**: `generateReport` accepted `deps.fileWriter` but `handleReport` never constructed one → reports built in-memory and never written, and `sprint.docs.report` stayed null (which blocked the S4 archive gate). Added `buildReportFileWriterForHandler`; handleReport writes the report + persists `sprint.docs.report`. Persistence guard checks the merged `reportDeps.fileWriter` (caller override of `null` correctly skips).
+
+### Bundled fix — SessionStart session-id env var (Issue #119)
+
+> **Status**: Independent of the Sprint restore work; bundled into this branch per request. Root cause + fix identified in the issue; delivered via a 2-agent (behavioral + structural) investigation, then TDD.
+
+- **FIX — wrong session-id env var**: bkit read `process.env.CLAUDE_SESSION_ID`, but Claude Code exposes `CLAUDE_CODE_SESSION_ID`. `sessionId` was therefore always null on the SessionStart path → the per-session stable tag (`·a1b2`) introduced in #111 (F2) never appended → every concurrent Claude Code session in the same project directory rendered the identical title `[bkit] {primaryFeature}`, making two terminal windows indistinguishable. Present since at least 2.1.19.
+  - Centralized the resolution in `lib/infra/cc-bridge.getSessionId()` (the canonical accessor; only imports Node built-ins, no cycle) with the chain **payload `session_id` → `CLAUDE_CODE_SESSION_ID` → `CLAUDE_SESSION_ID` (legacy back-compat) → null** — matching the #111 Stop-path approach where the stdin payload is the most authoritative source.
+  - Applied the same chain at all 4 production sites: `hooks/session-start.js:300` (the cited root cause), `scripts/unified-stop.js:655,680`, `lib/orchestrator/team-protocol.js:92`. Every production code read now prefers `CLAUDE_CODE_SESSION_ID`; the only remaining `CLAUDE_SESSION_ID` references in prod are JSDoc fallback-chain docs.
+  - **Design decision (env vs payload for session-start)**: `session-start.js` does not parse stdin at the title block, and adding a second `readStdinSync()` deep in the hook risks a double-stdin-read. Since Claude Code sets `CLAUDE_CODE_SESSION_ID` in the process environment before the hook runs, the env var is the correct/authoritative source for SessionStart (the payload is the correct source for Stop — which is why #111 already threads `hookContext.session_id` there). Two different hooks, two right answers.
+  - **Incidental fix**: `test/integration/issue77-hook-e2e.test.js` TC-IT3a was a pre-existing broken test (asserted a tag-less title that only the *broken env path* would produce, while exercising the *working payload path*). Now passes for the first time with the corrected `·a096` expectation.
+- **Verification**: 9 new contract assertions (`tests/contract/session-id-env-119.test.js` — resolution chain + concurrent-session tag disambiguation); `cc-bridge.test.js` (24/24) updated to assert the new chain; 4 injection sites in integration/QA tests switched from `CLAUDE_SESSION_ID` to `CLAUDE_CODE_SESSION_ID`. Confirmed two different session ids produce distinct `·<tag>` suffixes (the #111/#119 payoff).
+- **E2E regression guard** (`test/regression/issue-119-session-id-env.test.js`): env-var resolution asserted through the real `cc-bridge` accessor + tag-disambiguation payoff via the real `scripts/user-prompt-handler.js` subprocess with a PDCA fixture (two distinct session ids → distinct titles) (6 assertions). Placed alongside `issue-53-path-quoting.test.js`.
+
+### Bundled fix — Cursor IDE PreToolUse JSON output (Issue #118)
+
+> **Status**: Independent of the Sprint restore work; bundled into this branch per request. Root cause + fix identified in the issue; delivered via a 2-agent (behavioral + structural) investigation, then TDD.
+
+- **FIX — `lib/core/io.js` emitted Claude-Code-format output under Cursor**: When bkit runs under Cursor IDE's Claude plugin bridge (detected via `process.env.CURSOR_VERSION`), the PreToolUse hook runner expects a different JSON schema than Claude Code. `outputAllow`/`outputBlock`/`outputBlockWithContext` previously emitted plain text (allow) and `{"decision":"block",...}` (deny) → Cursor failed with `JSON Parse Error: Unexpected token ...` and blocked Write/StrReplace/Shell until the plugin was disabled.
+  - Added `isCursorRuntime()` (`!!process.env.CURSOR_VERSION`, empty-string treated as unset) and branched the 3 PreToolUse-reachable output functions:
+    - **allow** → `{"permission":"allow","agent_message":...}` (message omitted when empty)
+    - **deny** → `{"permission":"deny","user_message":...,"agent_message":...}` (both fields populated; graceful `exit(0)`)
+    - **deny-with-context** → same deny schema, with the safer-alternatives list folded into `agent_message` (Cursor has no `hookSpecificOutput`, so the CC additional-context channel is remapped to the agent message).
+  - Stop-hook functions (`outputStopSurface`/`outputStopAllow`) and `outputEmpty` intentionally unchanged — Cursor only bridges PreToolUse, so they're unreachable under Cursor; CC behavior is byte-identical when `CURSOR_VERSION` is unset.
+  - **No hook-script changes needed**: the branch lives at the single `io.js` chokepoint that all 20+ hook callers (pre-write, unified-bash-pre, phase9-deploy-pre, plus PostToolUse/Notification/Subagent paths) already share — all callers inherit Cursor support. Verified E2E via `scripts/pre-write.js` under `CURSOR_VERSION=3.6.31`.
+- **8 new contract assertions** (`tests/contract/cursor-pretooluse-json-118.test.js`): Cursor allow/deny/deny-with-context schema + CC-format regression guard (plain-text allow, `{success,message}`, `{decision:"block"}`) + `isCursorRuntime` export.
+- **E2E regression guard** (`test/regression/issue-118-cursor-pretooluse.test.js`): spawns the real `scripts/pre-write.js` under `CURSOR_VERSION` and asserts stdout is valid Cursor JSON (`{"permission":"allow"|"deny",...}`, no CC-only `decision:block` leak) + CC plain-text behavior unchanged without the env var (3 assertions). Placed alongside the existing `issue-53-path-quoting.test.js` so the bug cannot recur silently.
+
+### Verification
+
+- **96 test assertions** across 14 tracked test files (`sprint-restore-slice1..5`, `slice2-followups`, `slice3-{completion,report,acceptance}`, `sprint-restore-e2e`, `cursor-pretooluse-json-118`, `session-id-env-119`, plus e2e regression guards `test/regression/issue-118-cursor-pretooluse` + `test/regression/issue-119-session-id-env`), all PASS. Plus 2 bundled-fix integration/QA updates (issue77-hook-e2e TC-IT3a corrected, 4 env-injection sites migrated to `CLAUDE_CODE_SESSION_ID`).
+- **Master E2E** (`sprint-restore-e2e.test.js`): full lifecycle via the in-process dispatcher, value-aware runner (0 for `<=` count gates, 100 for `>=` percent gates), zero manual JSON editing. Reaches `status:'archived'` with S2=100, S4 ready, `docs.report` set, featureMap completions advanced.
+- **Lint**: 0 errors on changed production code (pre-existing warnings only); **0 linting bypasses** added (`noqa`/`eslint-disable`/`@ts-ignore`/`type: ignore` — none).
+- **Final reviewer verdict**: READY TO MERGE.
+
+### Deferred (tracked, not silently dropped)
+
+- **Skip-iterate autorun-loop activation**: Slice 4 made `computeNextPhase` CAPABLE of `do→qa` skip-iterate, but the autorun loop still passes `sprint.phase` (string) → takes the back-compat path → routes `do→iterate` unconditionally (CAPABLE-BUT-INERT). Wiring the loop (`computeNextPhase(sprint)`) is a one-line change `transitions.js` already permits, but it activates skip-iterate inside the E2E autorun loop — intersecting pause-trigger arming, budget accounting, and phase-timeout behavior → deserves its own PDCA-tracked unit with E2E autorun coverage. Recorded in `work/sprint-investigation/out-of-scope.md` §5 + a `// NOTE` TODO at the call site (`start-sprint.usecase.js`).
+
+## [2.1.22] - 2026-06-02 (branch: `release/v2.1.22-hardening`)
+
+> **Status**: Hardening Release (in progress) — 6-sprint master plan (`docs/01-plan/features/v2.1.22-hardening.master-plan.md`). No new user-facing features; quality hardening / consistency only. Kahn order S1→S2→S4→S3a→S3b→S5.
+
+### S1 — CC v2.1.159 Response (ENH-324~328)
+
+> Input basis: `docs/04-report/features/cc-v2146-v2159-impact-analysis.report.md` (CC v2.1.146→v2.1.159, 13-version batch, ADR 0003 16th cycle).
+
+- **ENH-324 — ENH-317 CANCELLED (MOOT)**: The previous cycle (v2.1.21 analysis) treated CC v2.1.147's `/simplify` → `/code-review` rename as Breaking-equivalent and created ENH-317 (deferred rename), but CC **reverted** it in **v2.1.152** (reintroducing `/simplify` as a `/code-review --fix` alias) and **v2.1.154** (independently restoring `/simplify` as a cleanup-only review). NET: both `/simplify` (cleanup) and `/code-review` (bug-hunt + effort) are valid. bkit's 10 `/simplify` code surfaces (`lib/intent/language.js:147`, etc.) carry cleanup semantics and **match CC v2.1.154 exactly** → no change needed. **bkit's deferred (do-not-force) decision is vindicated** (had the rename been forced at v147, a revert would have been required at v154).
+- **ENH-325 — recommended CC version bump decision**: Balanced recommendation v2.1.146 → **v2.1.159** (Opus 4.8 default high-effort = bkit's 17 opus agents + ENH-300 effort-aware alignment, v2.1.156 thinking-block API error fix). Conservative recommendation v2.1.123 → **v2.1.150 stable** (mitigates the +36 extreme drift). *Reflection of the documentation wording is batched into S5 docs-sync (to prevent drift recurrence).*
+- **ENH-326 — sessionTitle resume (formalized in CC v2.1.152) verification PASS**: CC v2.1.152 officially supports SessionStart `hookSpecificOutput.sessionTitle` on both startup and resume. Confirmed that bkit `hooks/session-start.js:301` unconditionally generates and emits sessionTitle (no startup-only guard) → covers the resume path. bkit ENH-226's undocumented dependency is elevated to an official contract.
+- **ENH-327 — multi-Agent frontmatter (CC v2.1.147 fix) no-impact confirmation**: CC v147 fixed the bug where "in the inline `Agent(a), Agent(b)` form of the tools: frontmatter, all but the last were dropped." bkit uses the **YAML block-list** form (one Task() per line) → no impact (the only inline-comma hit is prose in the body of `pm-lead.md:45`). All 12 agents, including cto-lead with 38 Task(), are safe. The fix provides future safety.
+- **ENH-328 — 2 new monitors registered + differentiation streak update**: Registered **MON-CC-NEW-CHOICE-LOOP** (P1, #64447 infinite loop awaiting user choice, adjacent to v154 MCQ behavior) + **MON-CC-NEW-BG-OTEL-DROP** (P2, #64436 background OTEL log drop) in `lib/cc-regression/registry.js` (CC_REGRESSIONS 22→24). Differentiation streak: **#56293→17** (ENH-292) / **#57317→11** (ENH-303) / **#58904→7** (ENH-310) — unresolved across v147~v159; v154 `/workflows` parallel spawn AMPLIFIES #56293 caching 10x → strengthens the ENH-292 sequential-dispatch moat. **Continuous-compatibility 101→112 milestone**.
+
+### S2 — Cross-Platform Verification (mac/windows) (ENH-329~335)
+
+> Input basis: master plan §10 S2 + this sprint's line-level field measurement. Artifacts: `docs/01-plan/features/cross-platform-mac-windows.plan.md` · `docs/02-design/features/cross-platform-mac-windows.design.md` · `docs/04-report/features/cross-platform-mac-windows.report.md`. **Field-measurement correction**: the master plan's worst-case estimates (14 raw concats / expanded shell branching / 21 hooks at risk) were overstated — bkit is already ~90% cross-platform-safe (`path.join` 349, raw `__dirname+'/'` concat 0, exec uses only git/gh/node/npx, POSIX coreutils exec 0). The real risk is a single category: **CRLF-unhandled frontmatter/markdown parsers**.
+
+- **ENH-331 — CRLF/LF handling (P0, hard-break fix)**: Fixed a defect where, on Windows CRLF (`---\r\n`) files, the frontmatter fence regex `/^---\n.../` **failed to match entirely** → breaking skill/agent/output-style loading. (a) Applied `\r?\n` to the fence regex in 6 places: `lib/util/markdown-parse.js:49`, `lib/qa/utils/pattern-matcher.js:186`, **`hooks/startup/context-init.js:146` (runtime hook)**, `scripts/validate-plugin.js:83`, `scripts/audit-output-styles.js:21/45`. (b) Converted file-content `split('\n')` → `split(/\r?\n/)` across **34 sites / 19 files** (skill-orchestrator · import-resolver · pattern-matcher · workflow-parser · discovery/explorer · audit · cc-regression, etc.). *Those already using `\r?\n` — skill-orchestrator:60 · frontmatter.js:57/109 · import-resolver:176 — were verified (no change needed).*
+- **ENH-329 — Path separator consistency**: Added backslash normalization (`.replace(/\\/g,'/')`) to the module-path comparison in `scripts/check-deadcode.js` (to guard against win32 glob/fs results). Annotated in a comment that the glob-pattern split in `lib/qa/utils/file-resolver.js:76` follows a forward-slash convention (not an fs path). `lib/ui/impact-view.js` is already normalized (verified).
+- **ENH-330 — Shell branching verification (YAGNI)**: Full audit of 18 exec files — only `git`/`gh`/`node`/`npx` are used, POSIX coreutils (find/wc/grep/cat) exec **0** → confirmed **no bash↔pwsh branching needed**. The existing 2 `process.platform` sites (defense-coordinator · enh-254-fork-precondition) are sufficient. The "no branching needed" rationale is codified in the design as a future regression baseline.
+- **ENH-332 — Hook Windows firing verification**: All 25 hooks.json commands use the `node "${CLAUDE_PLUGIN_ROOT}/<path>.js"` form (node accepts forward-slash on win32 → safe); the 61 files with shebang `#!/usr/bin/env node` are inert under direct `node` invocation (irrelevant on win32). Of the 8 hook .js files, only the context-init fence needs fixing (covered by ENH-331).
+- **Verification**: CRLF runtime QA **8/8 PASS** (3 frontmatter parsers × CRLF/LF), regressions **0** (test suite `comm` comparison before/after change — 7 pre-existing fails identical before and after), `verify-full-system` module 188/188 · hook syntax 69/69 · agent 40/40 · hooks.json 25/25 PASS. Regression invariant: `\n`→`\r?\n` and `'\n'`→`/\r?\n/` are byte-identical on LF input (no regression on mac/linux).
+- **Limitations/Carry (ENH-335)**: Current environment is Darwin → **actual Windows runtime firing verification was not performed** (only up to static analysis + consistency + CRLF no-regression). Actual Windows/PS/WSL verification is split into a **follow-up ENH (CI matrix)**. Residual `split('\n')` in scripts/ (dev/CI tooling, low risk) is carried as a follow-up consistency cleanup.
+
+### S6 — CC Stop Hook Output Schema Compliance (ENH-361~366)
+
+> Active incorporation (2026-06-01): after S2 completion, while the user was running `/sprint list`, a `Stop hook error: Hook JSON output validation failed — (root): Invalid input` occurred → in-depth analysis confirmed a systemic defect common to 5 Stop emitters → new P0 sprint. Artifacts: `docs/03-analysis/features/cc-stop-hook-schema-compliance.analysis.md` · `docs/01-plan|02-design|04-report/features/cc-stop-hook-schema-compliance.*`. Kahn re-sequencing S1→S2→**S6**→S4→S3a→S3b→S5.
+
+- **Root cause (RC0)**: `lib/domain/ports/cc-payload.port.js` **mistyped** `decision` as `'allow'|'deny'|'ask'|'defer'` (= permissionDecision values) → 5 emitters output `decision:'allow'` (CC Stop accepts only `approve|block`) + Stop-unsupported `hookSpecificOutput` (additionalContext/sessionTitle/userPrompt) + out-of-schema root fields (`skillResult`/`autoTrigger`/`iterationResult`/`analysisResult`). CC rejected these as CC tightened hook-output validation in the **same class** as the plugin manifest schema hardening (ADR 0011).
+- **ENH-361**: Corrected the `cc-payload.port.js` HookOutput typedef — separated `decision:'approve'|'block'` (Stop) ↔ `permissionDecision:'allow'|'deny'|'ask'` (PreToolUse) + contract JSDoc.
+- **ENH-364**: Added single-SoT helpers to `lib/core/io.js`: `outputStopSurface(reason)` (= `{decision:'block',reason}`, forcing Claude to render a summary + next-step — preserving the #113 intent) / `outputStopAllow()` (= `{}`, clean stop).
+- **ENH-362/363**: Converted 5 emitters (`sprint-skill-stop` · `pdca-skill-stop` · `plan-plus-stop` · `iterator-stop` · `gap-detector-stop`) to compliant — removed `decision:'allow'`, `hookSpecificOutput`, and non-schema root fields; executive summary → `reason`, AskUserQuestion options → serialized into `reason` text, structured data → `debugLog`. Cleaned up unused imports.
+- **ENH-365**: `tests/contract/v2122-stop-hook-output-schema.test.js` (new) — contract guard for the 5 emitters' output against the CC Stop schema (blocks recurrence). Corrected `test/unit/sprint-skill-stop.test.js` (old buggy shape → compliant, 20/20).
+- **ENH-366**: Registered `MON-CC-NEW-STOP-SCHEMA-STRICT` (HIGH) in `lib/cc-regression/registry.js` (R3-321 lineage, resolved by bkit S6).
+- **Verification**: runtime schema QA **31/31** (5 emitters × key-set / decision enum / forbidden fields), unit e2e **20/20** (including unified-stop dispatch + marker consume), regressions **0** (before/after `comm`), contract test exit 0. Representative: `gap-detector-stop` → `{"decision":"block","reason":...}` (previously rejected), read-only sprint → `{}`.
+- **Limitations/Carry**: sessionTitle on Stop is lost (CC unsupported) → unified into SessionStart (#111 per-Stop title refresh lost, impact LOW). The CC strict-validation introduction version is unknown (v2.1.159 confirmed, reconcile pin TODO).
+
+### S4 — Tech-Debt & Dead-Code Elimination (ENH-336~342)
+
+> Input basis: master plan §10 S4 + this sprint's full field measurement. Artifacts: `docs/01-plan|02-design|04-report/features/tech-debt-deadcode-elimination.*`. **Field-measurement correction**: the estimates (6 pdca-eval stubs / 19~491 test skips / 5 TODOs / dead module / orphan script) were all raw-match over-counts — **0 items of dead code to remove**. Every candidate is live (contract-required / CI-invoked / test-depended / CLI entry point / documentation tooling).
+
+- **ENH-336 (governance decision — core)**: Confirmed **permanent retention** of the 6 deprecated stubs `pdca-eval-{act,check,design,do,plan,pm}`. Rationale: (1) the v2.1.9 + v2.1.16 immutable contract baselines both list all 6, (2) `contract-test-run.js runL4Deprecation()` yields `L4 FAIL` if a baselined agent is absent without a `deprecatedIn` stub, (3) the stubs carry `deprecatedIn:v2.1.13` → currently L4 PASS. Removing them would corrupt 2 historical immutable baselines + break the `Active+Deprecated===agents+6` invariant → prohibited. **Implementation**: added a governance-lock comment to `EXPECTED_DEPRECATED_AGENT_NAMES` in `lib/domain/rules/docs-code-invariants.js` (prevents future erroneous deletion; value/export unchanged).
+- **ENH-337 (test skip triage)**: Actually disabled tests **0** — `\b(it|describe|test|context|suite)\.skip\b`/`.only`/`xit(` are all 0 (the 412 were `process.exit(` substring mismatches). The custom `skip(id,msg)` helper is legitimate conditional-skip infrastructure. No removals.
+- **ENH-338 (TODO triage)**: Across lib/scripts/hooks, TODOs total **1** (the intentional reconcile-pin forward-TODO added in S6). Retained.
+- **ENH-339 (dead lib module)**: `scripts/check-deadcode.js` → **Dead(NEW)=0** (188 modules: 141 live / 47 exempt [type-only port · facade · dynamic load] / 0 legacy debt). No removals.
+- **ENH-340 (orphan script / stale state)**: Full verification of 7 unreferenced candidates → all live (`check-deadcode`/`check-guards`/`check-test-tracking` = `.github/workflows/contract-check.yml` CI, `verify-full-system` = full-system verifier CLI, `audit-output-styles`/`sprint-memory-writer` = docs + CLI, `sync-folders` = `tests/qa/v2112-deep-qa-fixes.test.js` test dependency + bkit-system catalog). True orphans **0**. `.bkit/state` is gitignored local-only (release-irrelevant).
+- **ENH-341 (removal manifest)**: **Total safe removals 0** + per-candidate live rationale (safety justification) documented (design §2).
+- **Verification**: L4 deprecation governance PASS (v2.1.9+v2.1.16 exit 0), check-deadcode Dead=0, the `Active(34)+Deprecated(6)===agents(34)+6` invariant true, regressions **0** (before/after `comm`, 7 pre-existing identical). The only code change is the single governance comment (M4=100).
+
+### S3a — Context-Eng Simplification: God-File Split (ENH-343~348)
+
+> Input basis: master plan §8 simplicity invariant + §10 S3a. Artifacts: `docs/01-plan|02-design|04-report/features/ctx-eng-godfile-split.*`. **god-files (>700 LOC) 4 → 0**. All behavior-preserving extractions (verbatim move + re-export, logic unchanged), one commit checkpoint per file (no half-broken states), with contract L1+L4 + check-deadcode + full regression passing on every split.
+
+- **ENH-346** `scripts/unified-stop.js` 751→**693**: 10 lazy-dep getters → `scripts/lib/unified-stop-deps.js` (path ../lib→../../lib rebase). (commit 2c49218)
+- **ENH-345** `lib/pdca/automation.js` 770→**451**: 3 AskUserQuestion/user-prompt builders (emitUserPrompt/formatAskUserQuestion/buildNextActionQuestion) → `lib/pdca/automation-questions.js` (pure, no impact via re-export to external consumers). (commit e43bb0f)
+- **ENH-344** `lib/pdca/state-machine.js` 985→**406**: STATES/EVENTS/TRANSITIONS(25)/GUARDS/ACTIONS + _checkChromeMcpAvailable → `lib/pdca/state-transitions.js` (self-contained data, getCore/getStatus/getPhase duplicated). (commit 43d47a2)
+- **ENH-343** `scripts/sprint-handler.js` 1509→**271**: highest risk (sprint dispatcher). 4-module decomposition — helpers → `scripts/lib/sprint-handler-shared.js` (361), 14 lifecycle handlers → `sprint-handlers-core.js` (514), 6 admin handlers → `sprint-handlers-admin.js` (541). Handlers do not call one another (verified) → unidirectional dependency (shared←handlers←dispatcher), no cycles. Public exports `{handleSprintAction, VALID_ACTIONS, getInfra}` unchanged. 14 inline lazy requires rebased. (commit cec28c4)
+- **ENH-347**: audit-logger(689)/gap-detector-stop(602)/trust-engine(577) <700 → not god-files, monitor only (not split).
+- **ENH-348 simplicity invariant final verification**: god-files **0**, largest file **541** (≤700), lib subdirs **22** (no increase), lib modules **190** (+2, ≤+10), contract assertions **255/234** (unchanged), all gates green.
+- **Verification**: dispatcher live behavior (help/list/status/measure/trust idempotent-noop), sprint-handler dedicated tests 6/6 + state-machine 4/4 PASS, contract L1+L4 255/234 PASS (across all splits), check-deadcode Dead=0, verify-full-system module 190/190 · hook 73/73 · agent 40/40 · hooks.json 25/25, regressions **0** (each of the 4 splits identical to baseline 7).
+
+### S3b — Context-Eng Simplification: Layer/Pipeline Consolidation (ENH-349~354)
+
+> Input basis: master plan §8 simplicity invariant + §10 S3b. Artifacts: `docs/01-plan|02-design|04-report/features/ctx-eng-layer-consolidation.*` + **ADR `docs/adr/0013-context-engineering-factoring.md`**. **0 code changes** — full code verification found no actionable redundancy to consolidate (the same "estimate ≠ field measurement" as S2/S4). The S3b simplification outcome is already realized by S3a's god-file 4→0.
+
+- **ENH-349~352 (consolidation verification)**: All consolidation candidates proved non-redundant → 0 consolidations. (a) lib subdirs 22≤22 satisfied; single-module subdirs are distinct feature + skill/MCP entry points (lib/sprint 38 importers). (b) the "8-layer context engineering" is a **conceptual capability map** from `AI-NATIVE §205-212` (L1 Skills~L8 Sprint), not code → merging = capability removal (Anti-Mission violation). (c) the 8 Ports (audit-sink/caching-cost/cc-payload/docs-code-index/mcp-tool/regression-registry/state-store/token-meter) are all distinct DDD contracts. (d) frontmatter parsing is **already consolidated** in `lib/util/frontmatter.js` (v2.1.18 CO-5) + `markdown-parse.js` (v2.1.19 S3) (actually required by docs-code-scanner + 5 baseline consumers). (e) identical basenames (executive-summary/transitions/phases) are **intentional parallel domains** of pdca∥sprint.
+- **ENH-353 (ADR 0013)**: Permanently records that the Context Engineering structure is intentional factoring — non-consolidation reasons (capability preservation + churn>benefit + 255 assertion risk) + future consolidation trigger condition (only when 2+ independent implementations of the same purpose diverge). Blocks future "structure-count-based" consolidation urges.
+- **ENH-354 (simplicity invariant verification)**: god-files **0**, largest file **693**, lib subdirs **22**, lib modules **190(+2)**, layers **8 (concept preserved)**, contract **255/234 unchanged**, all gates green — all satisfied.
+- **Verification**: contract L1+L4 255/234 PASS, check-deadcode Dead=0, regressions **0** (no code change, identical to baseline 7), code files changed 0 (docs/ADR only, M4=100).
+
+## [2.1.21] - 2026-05-29 (branch: `release/v2.1.21-issue-response`)
+
+> **Status**: Issue Response Sprint — resolved 2 external dogfooder open issues in a single unified sprint (`v2121-issue-response`, Trust L4). **#111** (sessionTitle conflict, reporter @wonuseo, external dogfooder #3) + **#113** (insufficient Sprint screen output enforcement, reporter @rohwonseok-ops). Based on actual codebase file:line verification (principle of not accepting external dogfooder claims unverified).
+> **Scope**: 8 features (P0×3 #111 / P1×4 + P2×1 #113) · 2 new modules (`lib/sprint/executive-summary.js`, `scripts/sprint-skill-stop.js`) · 8 refactors (session-title-cache / session-title / 4 Stop emitters / unified-stop / advance-phase.usecase / sprint-handler) · 5 new/extended TC files (79 new TC) · 1 new ADR (0012 Sprint Stop Hook Output Enforcement).
+> **Sprint planning**: `docs/01-plan/features/v2121-issue-response.master-plan.md` + `docs/00-pm/v2121-issue-response.prd.md` (sprint-master-planner agent 3rd-cycle dogfooding output).
+> **Anti-Mission preserved**: did not fully redesign the session-title format (kept the `[bkit] {action} {feature}` skeleton + only appended a tag) · did not share code with the PDCA executive-summary (separate Sprint shape) · did not fundamentally fix `getActiveSkill()` (skill_post drop #57317) (only bypassed via skill_name priority dependence) · sprint phase enum/state-machine unchanged.
+
+### Issue #111 — Session Title Isolation (Phase B, P0) — extends #77
+
+Resolved a bug present in all v2.1.6~v2.1.20 versions where parallel sessions in the same PROJECT_DIR with the same feature/phase had **identical window titles** (`[bkit] PLAN f1`) (risk of entering dangerous commands into the wrong window). #77 v2.1.6 Phase A only solved per-message overwrite, opt-out, and stale TTL; session isolation remained incomplete.
+
+- **F1** `lib/core/session-title-cache.js` — converted the single flat record per PROJECT_DIR into a `{ $schemaVersion: 2, sessions: { [sessionId]: {...} } }` map structure. Mirrors the `session-ctx-fp.js` validation pattern (atomic write + inline GC: stale 7d TTL + LRU cap 200). Legacy flat records are auto-migrated once in `readCache()` (backward-compat). Switched `isSameAsCached` to per-session lookup → removed the side effect where session B clobbered session A's record (which broke ENH-228 phase-change-only dedup).
+- **F2** `lib/pdca/session-title.js` — appends a sessionId-based stable short tag (`·a1b2`, sha256 truncation) to the end of the title (`[bkit] PLAN f1 ·a1b2`). Supports the `{tag}` format token + auto-appends when not included in the format. Omits the tag when sessionId is absent (backward-compat). Exports `sessionTag()`.
+- **F3** session_id threading — 4 Stop emitters (5 call sites) in `scripts/{iterator-stop,plan-plus-stop,pdca-skill-stop,gap-detector-stop}.js` now pass the session identifier via `generateSessionTitle({ ..., sessionId: input.session_id })` (previously not passed → tag not appended).
+
+### Issue #113 — Sprint Output Enforcement (P1/P2) — extends #93
+
+Resolved the visibility gap where Sprint's success/intermediate/status/watch paths returned only raw JSON, relying 100% on LLM narration. Introduced Stop hook output enforcement to Sprint, equivalent to PDCA.
+
+- **F4** `lib/sprint/executive-summary.js` (new) — Sprint shape Executive Summary (Mission/Result/matchRate/Cross-Sprint Integration/Invariant/plugin validate). **Separate** from the PDCA shape (problem/solution/...) (#113 §D). Pure module (no disk I/O). Shares a single source for the per-feature table with F8 via `formatStatusScreen()`/`formatFeatureTable()`.
+- **F5** `scripts/sprint-skill-stop.js` (new) — Sprint Stop hook. Outputs Exec Summary + AskUserQuestion + sessionTitle. Adopted the **run-export pattern** (`module.exports = { run }`, identical to cto-stop/team-stop) — the bare-require-`{}` pattern (pdca-skill-stop) is a no-op when routed through unified-stop `executeHandler`'s `require()`, so run-export is required to guarantee actual dispatch. Relies on skill_name priority (avoiding #57317).
+- **F6** `scripts/unified-stop.js` + **new `lib/core/active-skill-marker.js`** — registers `'sprint'` in `SKILL_HANDLERS` + a **cross-process active-skill marker** dispatch path. **A defect discovered through actual `claude -p` verification**: CC does not include `skill_name` in the Stop payload (`hasSkillName:false` measured), `getActiveSkill()` is in-memory so it is useless cross-process + skill_post #57317 drop → all 4 paths of `detectActiveSkill()` wiped out → with the existing design **no skill Stop handler fires in production** (PDCA included). Resolution: sprint-handler writes `.bkit/runtime/active-skill.json` → unified-stop peeks (detectActiveSkill 3.5) → sprint-skill-stop consumes (TTL 10 min + consume-once). Confirmed in the actual runtime via `Detection result: activeSkill="sprint"` → `handled:true`.
+- **F7** `lib/application/sprint-lifecycle/advance-phase.usecase.js` — added `phaseTransitionSummary` output to the SUCCESS path. Caller-injected `deps.transitionSummaryBuilder` (mirroring the #93 failureReporter DI discipline) — keeps usecase purity (no fs write or lib/sprint import), with `scripts/sprint-handler.js handlePhase` doing the wiring.
+- **F8** `scripts/sprint-handler.js` — `handleStatus`/`handleWatch` attach a `display` field (human-readable per-feature table + one-line gates summary) to the result (#113 §C). Raw JSON is preserved for programmatic use.
+
+### Architecture Decision Records
+
+- **ADR 0012** (new) — Sprint Stop Hook Output Enforcement: (D1) run-export pattern (avoiding bare-require no-op, necessary condition), (D2) sprint shape separate from PDCA, (D3) usecase purity DI, (D5) **cross-process active-skill marker** (bypassing the wipeout of all 4 detectActiveSkill paths — sufficient condition). Inherits the #93/v2.1.16 + ADR 0011 precedent.
+
+### Tests
+
+- `test/unit/session-title.test.js` (extended +8 TC) — 2-session DISTINCT title / dedup restoration after clobber / legacy migration / tag omission on sessionId absence / sessionTag determinism.
+- `test/unit/sprint-executive-summary.test.js` (new 28 TC) — sprint shape / PDCA shape separation / context override / next actions / feature table / formatStatusScreen.
+- `test/unit/sprint-skill-stop.test.js` (new 20 TC) — Exec Summary output / sessionTitle tag / userPrompt / no output on read-only / run-export / unified-stop e2e dispatch (TC-U1) / **marker-path production dispatch (TC-U2) / misfire prevention (TC-U3)**.
+- `test/unit/active-skill-marker.test.js` (new 10 TC) — write/read/consume roundtrip / TTL expiry / corrupt JSON defense / consume-once.
+- `test/contract/sprint-skill-handler-registration.test.js` (new 5 TC) — SKILL_HANDLERS sprint entry + run-export structure invariant.
+- `test/unit/sprint-lifecycle/advance-phase-transition-summary.test.js` (new 11 TC) — phaseTransitionSummary DI contract + usecase purity (absence of fs/lib-sprint import) contract.
+- **Total 92 new/extended TC** (all PASS). Includes actual `claude -p --plugin-dir .` runtime dispatch verification (static checks + synthetic payloads alone miss the dispatch defect — [[feedback_thorough_qa]]).
 
 ### Cross-references
 
-- #111 ⊃ #77 (v2.1.6 Phase A session isolation 미완) · #113 ⊃ #93 (v2.1.16 gate_fail human-readable, success path 미해결).
-- **Latent finding (CARRY-#113-1)**: PDCA 계열 skill Stop handler(pdca-skill-stop / gap-detector-stop / iterator-stop / plan-plus-stop)는 (a) bare-require-`{}` no-op + (b) `detectActiveSkill()` 4경로 전멸로 **production 에서 동일하게 미발동**한다(실 `claude -p` 검증). sprint 는 run-export(D1) + active-skill 마커(D5)로 완전 해소했다. PDCA 계열도 동일 패턴(run-export + handler 마커)으로 전환 가능하나, 별도 회귀 검증이 필요하여 v2.1.22+ 로 carry.
+- #111 ⊃ #77 (v2.1.6 Phase A session isolation incomplete) · #113 ⊃ #93 (v2.1.16 gate_fail human-readable, success path unresolved).
+- **Latent finding (CARRY-#113-1)**: PDCA-family skill Stop handlers (pdca-skill-stop / gap-detector-stop / iterator-stop / plan-plus-stop) **likewise fail to fire in production** (verified via actual `claude -p`) due to (a) bare-require-`{}` no-op + (b) the wipeout of all 4 `detectActiveSkill()` paths. sprint fully resolved this via run-export (D1) + active-skill marker (D5). The PDCA family can also be converted to the same pattern (run-export + handler marker), but since it requires separate regression verification, it is carried to v2.1.22+.
 
 ## [2.1.20] - 2026-05-26 (branch: `release/v2.1.20-marketplace-recovery`)
 
-> **Status**: Marketplace Recovery + Plugin Manifest Schema Compliance Sprint — 외부 dogfooder 정병진 (@bj) 2026-05-26 bkit v2.1.14 install 실패 (`Validation errors: : Unrecognized key: "displayName"`) incident 가 트리거. cc-version-researcher 88% 신뢰도 결론 (정병진 CC ≤ v2.1.142 추정 — `displayName` 은 v2.1.143+ 공식 schema 정식 키) → 3-layer 대응 (Recovery + Defense + Forward-proofing) + bkit Early Adopter Program 외부 dogfooder #2 entry.
-> **Scope**: 14 features (P0×4 / P1×5 / P2×5) · 3 sub-sprints · 3 신규 ENH (321/322/323) · 1 신규 ADR (0011 Plugin Manifest Schema Compliance Policy) · 1 외부 dogfooder #2 (@bj).
+> **Status**: Marketplace Recovery + Plugin Manifest Schema Compliance Sprint — triggered by external dogfooder Jeong Byeong-jin (@bj)'s 2026-05-26 bkit v2.1.14 install failure (`Validation errors: : Unrecognized key: "displayName"`) incident. The cc-version-researcher's 88%-confidence conclusion (Jeong Byeong-jin's CC estimated ≤ v2.1.142 — `displayName` is an official schema key as of v2.1.143+) → 3-layer response (Recovery + Defense + Forward-proofing) + bkit Early Adopter Program external dogfooder #2 entry.
+> **Scope**: 14 features (P0×4 / P1×5 / P2×5) · 3 sub-sprints · 3 new ENH (321/322/323) · 1 new ADR (0011 Plugin Manifest Schema Compliance Policy) · 1 external dogfooder #2 (@bj).
 > **Sprint planning**: `docs/sprint/v2120-marketplace-recovery/{master-plan,prd,plan,design}.md` (sprint-master-planner agent 2nd-cycle dogfooding output).
-> **Anti-Mission preserved**: `displayName` 제거 안 함 (v2.1.143+ UI picker 회귀 차단) · v2.1.142 이하 hard reject 안 함 (advisory only, UX 진입장벽 minimize) · Anthropic docs vs 구현 lenient/strict 모순 (Q1) 자체 해결 안 함 (외부 책임) · bkit-starter plugin 변경 안 함 (displayName 미포함, 영향 0).
-> **External dogfooder #2**: @bj (정병진) — joined 2026-05-26 (Lifecycle Stage 1 → Stage 5), entry at `docs/external-dogfooders/bj.md`.
+> **Anti-Mission preserved**: did not remove `displayName` (blocks v2.1.143+ UI picker regression) · did not hard-reject CC v2.1.142 or below (advisory only, minimizing UX entry barriers) · did not resolve the Anthropic docs vs implementation lenient/strict contradiction (Q1) ourselves (external responsibility) · did not change the bkit-starter plugin (no displayName included, impact 0).
+> **External dogfooder #2**: @bj (Jeong Byeong-jin) — joined 2026-05-26 (Lifecycle Stage 1 → Stage 5), entry at `docs/external-dogfooders/bj.md`.
 
 ### External Dogfooder Contributions
 
-- **@bj** (정병진) — bkit v2.1.14 install incident (2026-05-26). Drove the entire v2.1.20 sprint via precise error message + cache path + environment metadata sharing. Reproduction scenario absorbed at `test/e2e/external-dogfood/cc-min-version.test.js` (5 TC, Lifecycle Stage 4 Regression Lock achieved). Trust Score `externalDogfoodFeedbackResponseRate` (weight 0.05) accumulated. See `docs/external-dogfooders/bj.md` (Hall of Fame #2).
+- **@bj** (Jeong Byeong-jin) — bkit v2.1.14 install incident (2026-05-26). Drove the entire v2.1.20 sprint via precise error message + cache path + environment metadata sharing. Reproduction scenario absorbed at `test/e2e/external-dogfood/cc-min-version.test.js` (5 TC, Lifecycle Stage 4 Regression Lock achieved). Trust Score `externalDogfoodFeedbackResponseRate` (weight 0.05) accumulated. See `docs/external-dogfooders/bj.md` (Hall of Fame #2).
 
 ### 3 Sub-Sprints (Kahn topological)
 
 **Sub-sprint 1 — Recovery (P0×4)** (commit `fb3e1bf`)
 
 - **F1** README.md / README-FULL.md — minimum CC v2.1.143 advisory 1-line, Claude Code badge v2.1.123+ → v2.1.143+, Version badge 2.1.19 → 2.1.20.
-- **F2** `.claude-plugin/marketplace.json` — bkit + marketplace version 2.1.19 → 2.1.20, description prefix 'Requires Claude Code v2.1.143+...' (Q4 spec 미확정으로 safe description-text 방식 채택).
-- **F3** `docs/sprint/v2120-marketplace-recovery/f3-bj-reply-draft.md` (new) — 정병진 회신 draft (Korean + English fallback). CC `--version` request + workaround + Hall of Fame 등록 검토 + ADR 0011 + sprint progress 안내.
-- **F4** `docs/06-guide/cc-compatibility.guide.md` (new, 9 sections) — bkit minimum CC 정합 표 / displayName 출처 / 21-key whitelist / install 실패 사용자 대응 / ADR 0003+0006+0011 관계 / cc-regression R3-321 / SessionStart detection / Open Questions Q1-Q5.
+- **F2** `.claude-plugin/marketplace.json` — bkit + marketplace version 2.1.19 → 2.1.20, description prefix 'Requires Claude Code v2.1.143+...' (adopted the safe description-text approach since the Q4 spec is undetermined).
+- **F3** `docs/sprint/v2120-marketplace-recovery/f3-bj-reply-draft.md` (new) — Jeong Byeong-jin reply draft (Korean + English fallback). CC `--version` request + workaround + Hall of Fame registration review + ADR 0011 + sprint progress guidance.
+- **F4** `docs/06-guide/cc-compatibility.guide.md` (new, 9 sections) — bkit minimum CC compatibility table / displayName origin / 21-key whitelist / response for users with install failures / ADR 0003+0006+0011 relationship / cc-regression R3-321 / SessionStart detection / Open Questions Q1-Q5.
 
 **Sub-sprint 2 — Defense (P1×5, Leaf-first → Orchestrator-last)** (commit `11ec408`)
 
 - **F9** `lib/domain/rules/docs-code-invariants.js` (Leaf SoT, @version 2.1.13 → 2.1.20) — added `EXPECTED_PLUGIN_JSON_KEYS` (21 keys, Object.freeze, Anthropic official schema whitelist) + `diffPluginJsonKeys(actual)` pure function. No FS access (domain purity preserved).
 - **F5** `scripts/validate-plugin.js` (ENH-322) — added `--strict` flag. New exit codes: 2 (extra key outside 21-key whitelist) / 3 (SoT import failure). Backward compat preserved. Smoke-tested: bkit plugin.json (9 keys) PASS, extra key fail with Exit 2.
 - **F6** `.github/workflows/contract-check.yml` — new step `Release Gate — plugin.json schema validation (21-key whitelist)` positioned after `docs-code-sync`. `continue-on-error: true` for v2.1.20 (1-week advisory), tightens to `false` in v2.1.21+.
-- **F7** `scripts/release-plugin-tag.sh` (ADR 0006 § Empirical Validation Gate 회복) — wired `claude plugin validate .` between CI-invariants and tag-conflict-detection (~30-day wire delay closed). `command -v claude` missing → WARN + fallback.
+- **F7** `scripts/release-plugin-tag.sh` (restoring ADR 0006 § Empirical Validation Gate) — wired `claude plugin validate .` between CI-invariants and tag-conflict-detection (~30-day wire delay closed). `command -v claude` missing → WARN + fallback.
 - **F8** `lib/cc-regression/registry.js` (ENH-321) — added entry #22 R3-321 (severity HIGH, since 2.1.45 strict path adoption, expectedFix 2.1.143 official schema recognition, affectedFiles 4). `check-guards.js` PASS 22 guards.
 
 **Sub-sprint 3 — Forward-proofing (P2×5)** (commit `5260e89`)
 
-- **F10** `hooks/startup/session-context.js` (ENH-323, @version 2.1.19 → 2.1.20) — added `detectCCVersion()` (`child_process.execSync` timeout 200ms hard cap, `.bkit/runtime/cc-version.json` cache 1h TTL, 1회/session cap) + `buildCCVersionAdvisoryContext()`. Sets `BKIT_CC_VERSION_ADVISORY=1` + additionalContext warning when CC < v2.1.143. OTEL emit `gen_ai.cc_version_detection_ms`. Opt-out via `BKIT_DISABLE_CC_VERSION_DETECTION=1`.
-- **F11** `docs/adr/0011-plugin-manifest-schema-compliance.md` (new, Status: Accepted) — 6 sections: Context (incident + root cause + ADR 0003/0006 위반 회고 + Anti-Mission) / Decision (5-layer policy) / Consequences / Empirical Validation (SC1-SC8 매핑) / History (append-only) / Open Question (Q1 Anthropic). Cross-linked to ADR 0003 + 0006 + 0010 + sprint docs.
-- **F12** `test/integration/config-sync.test.js` — CS-015 21-key whitelist 보강. 기존 displayName + name + description + license 요구 유지 (R3 Anti-Mission 강화). 45/45 PASS.
+- **F10** `hooks/startup/session-context.js` (ENH-323, @version 2.1.19 → 2.1.20) — added `detectCCVersion()` (`child_process.execSync` timeout 200ms hard cap, `.bkit/runtime/cc-version.json` cache 1h TTL, 1x/session cap) + `buildCCVersionAdvisoryContext()`. Sets `BKIT_CC_VERSION_ADVISORY=1` + additionalContext warning when CC < v2.1.143. OTEL emit `gen_ai.cc_version_detection_ms`. Opt-out via `BKIT_DISABLE_CC_VERSION_DETECTION=1`.
+- **F11** `docs/adr/0011-plugin-manifest-schema-compliance.md` (new, Status: Accepted) — 6 sections: Context (incident + root cause + ADR 0003/0006 violation retrospective + Anti-Mission) / Decision (5-layer policy) / Consequences / Empirical Validation (SC1-SC8 mapping) / History (append-only) / Open Question (Q1 Anthropic). Cross-linked to ADR 0003 + 0006 + 0010 + sprint docs.
+- **F12** `test/integration/config-sync.test.js` — CS-015 21-key whitelist reinforcement. Kept the existing displayName + name + description + license requirements (R3 Anti-Mission reinforcement). 45/45 PASS.
 - **F13** `test/e2e/external-dogfood/cc-min-version.test.js` (new, Lifecycle Stage 4 Regression Lock) — 5 TC: v2.1.142 mock → advisory + env set / v2.1.143 mock → no advisory / command-not-found silent skip / timeout >200ms silent skip / `BKIT_DISABLE_CC_VERSION_DETECTION=1` source=skipped. 3x consecutive stable PASS.
-- **F14** `docs/external-dogfooders/bj.md` (new) + `_README.md` 명단 갱신 — @bj as external dogfooder #2 (after @pruge #1). DA-4 status updated: N=2 confirmed (first-follower effect validated).
+- **F14** `docs/external-dogfooders/bj.md` (new) + `_README.md` roster update — @bj as external dogfooder #2 (after @pruge #1). DA-4 status updated: N=2 confirmed (first-follower effect validated).
 
-### ENH formal-candidates (v2.1.20 정식 편입 — 3건)
+### ENH formal-candidates (formally adopted in v2.1.20 — 3 items)
 
-- **ENH-321** R3-321 cc-regression guard (F8) — 차별화 #2 Defense Layer 6 reinforcement
-- **ENH-322** validate-plugin.js 21-key whitelist (F5 + F6 + F9) — Convention Restoration (v2.1.19 S2 spirit 계승)
+- **ENH-321** R3-321 cc-regression guard (F8) — Differentiation #2 Defense Layer 6 reinforcement
+- **ENH-322** validate-plugin.js 21-key whitelist (F5 + F6 + F9) — Convention Restoration (inheriting the v2.1.19 S2 spirit)
 - **ENH-323** SessionStart CC version detection (F10) — runtime advisory forward-proofing
 
 ### Added
@@ -111,15 +962,15 @@ Sprint 의 success/intermediate/status/watch 경로가 raw JSON 만 반환하여
 - `.claude-plugin/plugin.json` — version 2.1.19 → 2.1.20 (displayName unchanged per Anti-Mission)
 - `.claude-plugin/marketplace.json` — bkit + marketplace version 2.1.19 → 2.1.20, description prefix advisory
 - `bkit.config.json` — version 2.1.19 → 2.1.20, `ui.contextInjection.sections` adds `ccVersionAdvisory`
-- `test/integration/config-sync.test.js` CS-015 — diffPluginJsonKeys 21-key whitelist 추가
+- `test/integration/config-sync.test.js` CS-015 — added diffPluginJsonKeys 21-key whitelist
 - `docs/external-dogfooders/_README.md` — @bj entry added under "v2.1.20", DA-4 status N=2 confirmed
 
 ### Verification
 
-- **Domain SoT (F9)**: 21 keys frozen, bkit 9 keys 모두 whitelist 내, `diffPluginJsonKeys` extra/null/empty 분기 정상.
-- **CLI strict mode (F5)**: bkit Exit 0 (PASS), extra key Exit 2 (FAIL detected: `fooExtra`, `barExtra`), SoT import fail Exit 3, backward compat (`--strict` 없을 시 기존 동작) Exit 0.
-- **CI gate (F6)**: YAML 정합 (python3 yaml.safe_load PASS), 새 step `docs-code-sync` 직후 위치 검증.
-- **Release gate (F7)**: bash syntax OK, dry-run 진입 (working tree clean 단계 이후 wire 진행 가능).
+- **Domain SoT (F9)**: 21 keys frozen, all 9 bkit keys within whitelist, `diffPluginJsonKeys` extra/null/empty branches normal.
+- **CLI strict mode (F5)**: bkit Exit 0 (PASS), extra key Exit 2 (FAIL detected: `fooExtra`, `barExtra`), SoT import fail Exit 3, backward compat (existing behavior without `--strict`) Exit 0.
+- **CI gate (F6)**: YAML consistent (python3 yaml.safe_load PASS), new step verified to be positioned right after `docs-code-sync`.
+- **Release gate (F7)**: bash syntax OK, dry-run entry (wire can proceed after the working-tree-clean stage).
 - **Regression guard (F8)**: `node scripts/check-guards.js` → 22 guards, 0 warnings. semver gating: `getActive('2.1.142')` includes R3-321, `getActive('2.1.143')` excludes.
 - **SessionStart hook (F10)**: opt-out source=skipped, version detection isolated per scenario via PATH-shim.
 - **Integration test (F12)**: `node test/integration/config-sync.test.js` → 45/45 PASS (CS-015 reinforced).
@@ -127,21 +978,21 @@ Sprint 의 success/intermediate/status/watch 경로가 raw JSON 만 반환하여
 - **ADR 0011**: Status Accepted, 6 sections complete, cross-links to ADR 0003 + 0006 + 0010 + sprint docs verified.
 - **Hall of Fame (F14)**: `docs/external-dogfooders/bj.md` 5-stage Lifecycle progress documented, _README.md DA-4 status N=2 confirmed.
 
-### Open Questions (5건 — sprint 종결 시점 + 2026-05-26 CO-4 patch amend)
+### Open Questions (5 items — at sprint conclusion + 2026-05-26 CO-4 patch amend)
 
-- **Q1** Anthropic docs vs 구현 lenient/strict 모순 — 외부 책임 (bkit 해결 불가)
-- **Q2** 정병진 CC 버전 미확정 — F3 회신 대기 (Out-of-scope)
-- **Q3** ✅ **partially resolved 2026-05-26 CO-4 patch**: Anthropic CHANGELOG dateless 영구 미공개 (raw GitHub fetch 검증) + Releasebot 2026-05-15 detection proxy. cc-compatibility.guide.md § 2.2/2.2.1 + ADR 0011 § History/Q3 + sprint planning docs 4종 amend.
-- **Q4** marketplace.json `requirements.claudeCode` spec — description-text 안전 대체 (현 sprint 진행)
-- **Q5** v2.1.142 이하 사용자 비율 — post-release 모니터 (v2.1.21+ 분석)
+- **Q1** Anthropic docs vs implementation lenient/strict contradiction — external responsibility (bkit cannot resolve)
+- **Q2** Jeong Byeong-jin's CC version undetermined — awaiting F3 reply (Out-of-scope)
+- **Q3** ✅ **partially resolved 2026-05-26 CO-4 patch**: Anthropic CHANGELOG dateless and permanently unpublished (verified via raw GitHub fetch) + Releasebot 2026-05-15 detection proxy. Amended cc-compatibility.guide.md § 2.2/2.2.1 + ADR 0011 § History/Q3 + 4 sprint planning docs.
+- **Q4** marketplace.json `requirements.claudeCode` spec — safe substitution via description-text (current sprint in progress)
+- **Q5** ratio of users on CC v2.1.142 or below — post-release monitor (v2.1.21+ analysis)
 
 ### Roll-forward markers (v2.1.21+) — 2026-05-26 CO-5 patch amend
 
-- F6 contract-check.yml `continue-on-error` → `false` (1주 advisory only 종료)
-- F8 R3-321 telemetry 3-month 분석 → 격하/유지 결정
-- F10 ENH-323 SessionStart detection telemetry 3-month 분석 → 격하/유지 결정
-- F14 Hall of Fame @bj Stage 3 (Fix Released): **branch ✅ 2026-05-26 CO-5 patch**, GA tag 시점 "main + tag" upgrade ⏳
-- F14 Hall of Fame @bj Stage 5 (Public Acknowledge): **5-channel documented ✅ 2026-05-26 CO-5 patch** (bj.md / _README.md / README.md Hall of Fame v2.1.20 section / CHANGELOG attribution / ADR 0011 SC8), GA publish 시 외부 가시성 ↑
+- F6 contract-check.yml `continue-on-error` → `false` (end of 1-week advisory-only)
+- F8 R3-321 telemetry 3-month analysis → demote/retain decision
+- F10 ENH-323 SessionStart detection telemetry 3-month analysis → demote/retain decision
+- F14 Hall of Fame @bj Stage 3 (Fix Released): **branch ✅ 2026-05-26 CO-5 patch**, "main + tag" upgrade at GA tag time ⏳
+- F14 Hall of Fame @bj Stage 5 (Public Acknowledge): **5-channel documented ✅ 2026-05-26 CO-5 patch** (bj.md / _README.md / README.md Hall of Fame v2.1.20 section / CHANGELOG attribution / ADR 0011 SC8), external visibility ↑ at GA publish
 
 ## [2.1.19-hotfix.1] - 2026-05-21 (branch: `feature/v2119-hotfix-1-deadcode`)
 
@@ -166,11 +1017,11 @@ Sprint 의 success/intermediate/status/watch 경로가 raw JSON 만 반환하여
 
 ## [2.1.19] - 2026-05-21 (branch: `feature/v2119-quality-maturation`)
 
-> **Status**: Quality Maturation Sprint — pruge 가 v2.1.16~v2.1.18 cycle 에서 1.5일 / 10 issues 의 정밀한 결함 cluster (sprint domain) 를 보고. 단일 reactive fix loop 가 아닌 **5 sub-sprint master plan** 으로 sprint domain maturity 를 PDCA core 수준으로 격상. **모든 5 sub-sprint archived** + outer master sprint completion.
+> **Status**: Quality Maturation Sprint — pruge reported a precise defect cluster (sprint domain) of 10 issues over 1.5 days during the v2.1.16~v2.1.18 cycle. Rather than a single reactive fix loop, a **5 sub-sprint master plan** elevated sprint domain maturity to the PDCA core level. **All 5 sub-sprints archived** + outer master sprint completion.
 > **Scope**: Single PR — `feature/v2119-quality-maturation` (5 sub-sprints: S0 baseline + S1 Foundation + S2 Defense + S3 Polish + S4 Proactive + S5 Measurement). 152 TC across 30 test files PASS.
 > **Master plan**: `docs/01-plan/features/v2119-bkit-quality-maturation.master-plan.md` (23 sections, CTO redline applied — B-1/B-2/B-3 + M-1~M-5 + Strategic Insight all addressed).
 > **Predecessor**: v2.1.18 GA (PR #106, 2026-05-21 06:37Z).
-> **Reporter**: @pruge (James Kim) — `dandi-village-ledger` project. **Real User Hall of Fame** 첫 entry 등재.
+> **Reporter**: @pruge (James Kim) — `dandi-village-ledger` project. First entry in the **Real User Hall of Fame**.
 
 ### Closes GitHub Issues
 
@@ -194,22 +1045,22 @@ Sprint 의 success/intermediate/status/watch 경로가 raw JSON 만 반환하여
 - F1-3 `scripts/check-self-dogfood.sh` CI gate + Node helper (bash 3 compat)
 - F1-4 sprint init default L3 → L2 + L1 explicit warning + audit
 - F1-5 `/sprint annotate` archived-state annotation (closed enum, anti-mission preserved)
-- §19.5 Bootstrap Exception 모드 정착 — 4번째 successful instantiation 후 pattern 확립
+- §19.5 Bootstrap Exception mode established — pattern confirmed after the 4th successful instantiation
 
 **S2 — Defense: Convention Restoration** (commit `598a5b1`, 33 files combined with S4, 35 TC)
-- F2-1 sprint SKILL.md bkit-root convention 명시 (closes #107)
+- F2-1 sprint SKILL.md bkit-root convention specified (closes #107)
 - F2-2 `scripts/check-skills-docs-code-sync.js` — 44 skills × Docs=Code CI invariant
-- ★ **Critical evolution**: stripCodeBlocks (code-block-aware parsing) — S0 measurement bug fixed (phase-3-mockup + phase-9-deployment false positives 진단 + 정정)
+- ★ **Critical evolution**: stripCodeBlocks (code-block-aware parsing) — S0 measurement bug fixed (phase-3-mockup + phase-9-deployment false positives diagnosed + corrected)
 - F2-3 sprint skill full audit
 - F2-4 `test/contract/baseline/skills-convention.json` frozen baseline
 - F2-5 `scripts/lint-skill-md.js` PreToolUse hook (warning-only, R-3 mitigation)
 
 **S4 — Proactive: External Dogfooder Lifecycle** (commit `598a5b1` combined with S2, 14 TC)
-- F4-1 Trust Score 7-Component 확장 (externalDogfoodFeedbackResponseRate weight 0.05, Δ ≤5% R-10 verified)
+- F4-1 Trust Score 7-Component expansion (externalDogfoodFeedbackResponseRate weight 0.05, Δ ≤5% R-10 verified)
 - F4-2 `lib/control/external-feedback-tracker.js` (GitHub API + pure compute split)
 - F4-3 Real User Hall of Fame (README + `docs/external-dogfooders/` + marketplace narrative + DA-1~DA-3)
 - F4-4 pruge dandi 5 scenarios E2E regression test (`test/e2e/external-dogfood/dandi-*.test.js`)
-- ★ **ENH-318 정식 편입**: bkit 차별화 6/6 → **7/7** + Hall of Fame 첫 entry @pruge
+- ★ **ENH-318 formally adopted**: bkit differentiation 6/6 → **7/7** + Hall of Fame first entry @pruge
 
 **S3 — Polish: Sprint Report Maturity** (commit `b30e1b9`, 20 files, +1,668 LOC, 40 TC)
 - F3-1 failure-reporter resolution marker (A+C combined: file header + state field, atomic write, idempotent) — closes #103
@@ -218,8 +1069,8 @@ Sprint 의 success/intermediate/status/watch 경로가 raw JSON 만 반환하여
 - F3-4 `lib/application/sprint-lifecycle/kpi-resolver.js` (pure precedence chain)
 - F3-5 carry items rich rationale (featureMap.scope + details aggregated)
 - F3-6 lessons learned multi-aspect (iteration / autoPause / phase_duration / gate_measurement / gate_failure_resolution)
-- ★ **CO-S2-1 absorbed**: `lib/util/markdown-parse.js` 신설 (stripCodeBlocks single SoT)
-- ★ **CO-S2-3 absorbed**: master plan §7.2 inline note 정정 (1 actual + 2 false positives)
+- ★ **CO-S2-1 absorbed**: `lib/util/markdown-parse.js` newly created (stripCodeBlocks single SoT)
+- ★ **CO-S2-3 absorbed**: master plan §7.2 inline note corrected (1 actual + 2 false positives)
 
 **S5 — Measurement: Sprint Maturity Index** (commit `63931d5`, 10 files, +654 LOC, 5 TC)
 - F5-1 sqm-calculator evolve + `findFirstMatching` pattern fix (★ **CO-S0-5 bug discovered + fixed** — present since S0, missed for 5 sub-sprints)
@@ -233,7 +1084,7 @@ v2.1.17: #92/#93/#94/#95. v2.1.18: #100/#101/#102. **v2.1.19: #103/#104/#105/#10
 
 Total: 10 issues, 100% closed within 24h (S4 F4-2 externalDogfoodFeedbackResponseRate baseline = 100%).
 
-### Architecture (raw 실측)
+### Architecture (raw measured)
 
 | Component | v2.1.18 | v2.1.19 |
 |-----------|---------|---------|
@@ -241,7 +1092,7 @@ Total: 10 issues, 100% closed within 24h (S4 F4-2 externalDogfoodFeedbackRespons
 | Agents (Active) | 34 | 34 |
 | Lib Modules | 174 | **184+** (new: util/markdown-parse + 4 in application/sprint-lifecycle + control/external-feedback-tracker + quality/sqm-* + ui/sqm-panel) |
 | Scripts | 54 | **56** (new: check-skills-docs-code-sync + lint-skill-md + _v2119-s4-feedback-refresh + _check-self-dogfood-helper + check-self-dogfood.sh) |
-| Hook Events | 21 | 21 (PreToolUse SKILL.md linter entry 추가) |
+| Hook Events | 21 | 21 (PreToolUse SKILL.md linter entry added) |
 | MCP Tools | 19 | 19 |
 | ACTION_TYPES | 30 (post v2.1.18) | **39** (+9: sqm_baseline_measured + sprint_dogfood_started + sprint_bootstrap_mode_activated + sprint_trust_warning + sprint_annotated + self_dogfood_emergency_override + external_feedback_tracked + gate_fail_resolved + sprint_context_imported + sprint_kpi_divergence) |
 | Test count | 3,774 (v2.1.18) | **3,926+** (+152 v2.1.19) |
@@ -267,13 +1118,13 @@ Total: 10 issues, 100% closed within 24h (S4 F4-2 externalDogfoodFeedbackRespons
 - subAgentDispatchSuccessRate null → ~95 (S1 sprint-orchestrator live)
 - conventionContractTestPassRate 0 → ~99 (S2 F2-4 baseline contract live)
 
-### Bootstrap Exception 모드 — pattern fully validated
+### Bootstrap Exception mode — pattern fully validated
 
 5 sub-sprints all archived under PDCA-with-sprint-shadow (main session manual proxy for sub-agent dispatch). v2.1.20 will be **first true self-dogfood CI gate activation** — `scripts/check-self-dogfood.sh` (without `--bootstrap-mode` flag) will hard-fail when not-sprint releases attempt to tag.
 
-### Real User Hall of Fame — 첫 entry @pruge
+### Real User Hall of Fame — first entry @pruge
 
-`docs/external-dogfooders/pruge.md` (120 라인 archive: 10 issues × evidence + 5 absorbed scenarios + contribution quality criteria). README + marketplace narrative + bkit Early Adopter Program CTA. DA-4 (30-day dogfooder population review) carry to v2.1.20+.
+`docs/external-dogfooders/pruge.md` (120-line archive: 10 issues × evidence + 5 absorbed scenarios + contribution quality criteria). README + marketplace narrative + bkit Early Adopter Program CTA. DA-4 (30-day dogfooder population review) carried to v2.1.20+.
 
 ### Differentiation 7/7
 
@@ -303,43 +1154,43 @@ Total: 10 issues, 100% closed within 24h (S4 F4-2 externalDogfoodFeedbackRespons
 - CO-S1-1 ~ CO-S1-7 (S1 advanced features carry list)
 - CO-S4-1 external-feedback-tracker CI gate integration
 
-### Methodology — Bootstrap Exception 5번째 successful instantiation
+### Methodology — Bootstrap Exception 5th successful instantiation
 
-S0 + S1 + S4 + S2 + S3 + S5 모두 PDCA-with-sprint-shadow 으로 완주. Master plan §19.5 의 Bootstrap Exception 패턴이 *transitional protocol* 로 정착 — v2.1.20 부터 first true self-dogfood activation.
+S0 + S1 + S4 + S2 + S3 + S5 all completed under PDCA-with-sprint-shadow. The Bootstrap Exception pattern in master plan §19.5 is established as a *transitional protocol* — first true self-dogfood activation from v2.1.20.
 
 ## [2.1.18] - 2026-05-21 (branch: `feature/v2118-issue-fixes`)
 
-> **Status**: Sprint Trust UX Fix — bkit v2.1.16에서 보고된 3 GitHub Issues (#100/#101/#102, 모두 @pruge 보고 2026-05-21 03:54)를 단일 sprint로 통합 처리. L1 sprint lockout 3-stage trap 영구 해소.
+> **Status**: Sprint Trust UX Fix — consolidated 3 GitHub Issues reported in bkit v2.1.16 (#100/#101/#102, all reported by @pruge 2026-05-21 03:54) into a single sprint. Permanently resolved the L1 sprint lockout 3-stage trap.
 > **Scope**: Single PR — `feature/v2118-issue-fixes` (3 features hard-link: F1 chicken-and-egg unblocker + F2 trust mutation + F3 normalize unification + F4 sprint-master-planner CTO/QA expansion).
-> **Reporter Scenario**: @pruge dandi-village-ledger `s1-foundation` sprint — L1 init 후 P0 32/32 완료 시점에 trust escalation 불가, measure 항상 preview mode, sprint-orchestrator dispatch 실패. v2.1.18에서 8-step E2E test로 1:1 재현 후 fix evidence 확인.
-> **Methodology**: PM Team (pm-lead 4-agent orchestration → PRD Beachhead 19/20) + CTO Team (cto-lead architectural review APPROVE with CONCERNS, BLOCKER 3건 메인 세션 재측정 채택) + QA Team (qa-lead L1-L5 통합 검증) — 사용자 요청 "PM/CTO/QA 모두 활용 완성도 높게" 응답.
-> **Test**: **40 TC live PASS** (17 contract + 15 unit + 8 e2e), 목표 14 TC 대비 2.86× 초과 달성.
+> **Reporter Scenario**: @pruge dandi-village-ledger `s1-foundation` sprint — after L1 init, trust escalation impossible at the point of P0 32/32 completion, measure always in preview mode, sprint-orchestrator dispatch failure. Reproduced 1:1 with an 8-step E2E test in v2.1.18, then fix evidence confirmed.
+> **Methodology**: PM Team (pm-lead 4-agent orchestration → PRD Beachhead 19/20) + CTO Team (cto-lead architectural review APPROVE with CONCERNS, 3 BLOCKERs adopted with main-session re-measurement) + QA Team (qa-lead L1-L5 integrated verification) — responding to the user request "make full use of PM/CTO/QA all with high completeness".
+> **Test**: **40 TC live PASS** (17 contract + 15 unit + 8 e2e), 2.86× exceeding the 14 TC target.
 
 ### Fixed (Bug Fixes — GitHub Issues closure)
 
 #### #100 — sprint-orchestrator + 3 sprint-* agents missing `Task` tool (F1)
-- `agents/sprint-orchestrator.md` frontmatter `tools:` field 명시 — Task allowlist 7개 (gap-detector, code-analyzer, sprint-qa-flow, sprint-report-writer, qa-monitor, pdca-iterator, Explore) + 6 base tools
-- `agents/sprint-master-planner.md` `tools:` field 명시 — Task allowlist 7개 (✦ user-requested expansion: pm-lead, cto-lead, qa-lead 3 orchestrators + product-manager, frontend-architect, enterprise-expert 3 specialists + Explore)
-- `agents/sprint-qa-flow.md` `tools:` field 명시 — Task allowlist 2개 (qa-monitor, gap-detector) + 6 base
-- `agents/sprint-report-writer.md` `tools:` field 명시 — Task 불필요 (report aggregation only), 5 base tools
-- **차별화 #3 ENH-292 Sequential Dispatch 활성화**: 이전에는 sprint-orchestrator가 Task tool 부재로 `measure-router.js:233-253` `agentTaskRunner` 호출 시 `no_agent_runner` 반환했으나, v2.1.18부터 정상 sub-agent dispatch 가능 — "선언 → 실작동" 승격 첫 release
+- `agents/sprint-orchestrator.md` frontmatter `tools:` field specified — Task allowlist of 7 (gap-detector, code-analyzer, sprint-qa-flow, sprint-report-writer, qa-monitor, pdca-iterator, Explore) + 6 base tools
+- `agents/sprint-master-planner.md` `tools:` field specified — Task allowlist of 7 (✦ user-requested expansion: pm-lead, cto-lead, qa-lead 3 orchestrators + product-manager, frontend-architect, enterprise-expert 3 specialists + Explore)
+- `agents/sprint-qa-flow.md` `tools:` field specified — Task allowlist of 2 (qa-monitor, gap-detector) + 6 base
+- `agents/sprint-report-writer.md` `tools:` field specified — Task unnecessary (report aggregation only), 5 base tools
+- **Differentiation #3 ENH-292 Sequential Dispatch activated**: previously, when sprint-orchestrator called `agentTaskRunner` at `measure-router.js:233-253` it returned `no_agent_runner` due to the missing Task tool, but from v2.1.18 normal sub-agent dispatch is possible — first release promoting "declared → actually working"
 
-#### #101 — `/sprint trust` mutation 명령 신설 + audit (F2)
-- `scripts/sprint-handler.js`: `handleTrust(args, infra, deps)` 함수 신설 (signature `{ id, to, reason?, force?, actor? }`) + `case 'trust'` dispatch + `VALID_ACTIONS` 17 → **18 actions**
+#### #101 — `/sprint trust` mutation command newly added + audit (F2)
+- `scripts/sprint-handler.js`: new `handleTrust(args, infra, deps)` function (signature `{ id, to, reason?, force?, actor? }`) + `case 'trust'` dispatch + `VALID_ACTIONS` 17 → **18 actions**
 - helpers: `LEVEL_RANK` / `isDowngrade(from, to)` / `severity(from, to)` / `loadTrustScore(deps)` / `resolveActor(args)`
 - `lib/audit/audit-logger.js`: `ACTION_TYPES` **29 → 30** (`sprint_trust_changed` entry + details schema documented inline)
 - Downgrade guardrail: major downgrade (≥2 levels) requires `trustScore >= 80` (from `.bkit/state/trust-profile.json` `trustScore` field, 6-component weighted sum) OR `--force` flag
 - Idempotent path (`from === to`): emits audit with `noop: true` field (monitoring blind-spot prevention)
 - Actor auto-detection: explicit `args.actor` > `process.env.CLAUDE_AGENT_ID → 'agent'` > default `'user'` (spoofing mitigation)
 - `--force` flag: triggers `blastRadius: 'high'` for Defense Layer 6 alarm (ENH-289 natural integration)
-- `skills/sprint/SKILL.md` §10.1.3 "Trust Level Mutation" 신규 섹션 (comparison table, audit JSON example, downgrade guardrail explanation)
-- `commands/bkit.md` `/sprint trust` help line 추가
+- `skills/sprint/SKILL.md` §10.1.3 "Trust Level Mutation" new section (comparison table, audit JSON example, downgrade guardrail explanation)
+- `commands/bkit.md` added `/sprint trust` help line
 
 #### #102 — `--trust` CLI alias silently ignored at measure/phase paths (F3)
-- `scripts/sprint-handler.js:942-948` (`handleMeasure`) + `974-979` (`runPhaseGates`): `args.trustLevel` direct check → `normalizeTrustLevel(args)` 통일. `normalizeTrustLevel` 자체는 이미 precedence chain `trustLevel > trust > trustLevelAtStart` 구현 (line 68-74), 그러나 두 경로가 함수 호출 우회로 silent ignore 발생
-- Skill docs §10.2 (Trust Level Acceptance)의 declared behavior와 코드 일치 — Docs=Code 90% 매치율 유지
+- `scripts/sprint-handler.js:942-948` (`handleMeasure`) + `974-979` (`runPhaseGates`): `args.trustLevel` direct check → unified to `normalizeTrustLevel(args)`. `normalizeTrustLevel` itself already implements the precedence chain `trustLevel > trust > trustLevelAtStart` (line 68-74), but the two paths bypassed the function call, causing silent ignore
+- declared behavior in Skill docs §10.2 (Trust Level Acceptance) matches the code — Docs=Code 90% match rate maintained
 
-### Added — Tests (40 TC, 목표 14 TC 대비 2.86× 초과 달성)
+### Added — Tests (40 TC, 2.86× exceeding the 14 TC target)
 
 - `test/contract/sprint-agents-tools.test.js` (17 TC) — F1 4 sprint-* agents `tools:` field invariant
 - `test/unit/sprint-trust-normalization.test.js` (7 cases A-G) — F3 normalizeTrustLevel precedence chain
@@ -348,37 +1199,37 @@ S0 + S1 + S4 + S2 + S3 + S5 모두 PDCA-with-sprint-shadow 으로 완주. Master
 
 ### Added — Self-Referential Meta Risk Mitigation
 
-- **Chicken-and-egg 회피 패턴 확립**: 본 sprint 자체가 sprint-orchestrator Task tool fix 대상이므로 sprint container의 자동 orchestration 사용 불가. Plan §6.1 noteline으로 명시 — `sprint init`은 state tracking 용도, phase advance + measurement는 PDCA cycle (메인 세션 + pm-lead/cto-lead/qa-lead manual dispatch)로 진행. F1 적용 직후 sprint-orchestrator 정상화 → 차후 sprint부터 자동 orchestration 정상 작동
+- **Chicken-and-egg avoidance pattern established**: since this sprint itself is the target of the sprint-orchestrator Task tool fix, the sprint container's automatic orchestration could not be used. Specified in Plan §6.1 noteline — `sprint init` is for state tracking, while phase advance + measurement proceed via the PDCA cycle (main session + pm-lead/cto-lead/qa-lead manual dispatch). Right after applying F1, sprint-orchestrator normalized → automatic orchestration works normally from the next sprint
 
-### Methodology — PM/CTO/QA Team 통합 활용 첫 실증 sprint
+### Methodology — First demonstration sprint using PM/CTO/QA Teams integrated
 
-- **PM Team** (pm-lead orchestrate 4 agents): PRD 생성 — Beachhead Geoffrey Moore 19/20 (Burning Pain 5 / WTP 5 / Winnable 5 / Referral 4) + JTBD 6-Part + 5 User Stories + 6 Test Scenarios + Pre-mortem Top 3 + Negative-Reputation Loop Block narrative
-- **CTO Team** (cto-lead): Architectural Review APPROVE with CONCERNS — BLOCKER 3건 (controlScore→trustScore 정정 / ACTION_TYPES count 27→29 정정 / NDJSON injection 평가) + MEDIUM 3건 (no-op audit noop:true / actor spoofing mitigation / sub-agent-dispatcher state transition test) 모두 redline 반영. 메인 세션 Numeric Correction Protocol 준수: ACTION_TYPES 실측 29 (CTO 27 grep 한계 정정), trustScore 모델 실존 (`.bkit/state/trust-profile.json`)
-- **QA Team** (qa-lead): L1-L5 layer 통합 검증 보고서 + 보고자 시나리오 evidence
+- **PM Team** (pm-lead orchestrate 4 agents): PRD generation — Beachhead Geoffrey Moore 19/20 (Burning Pain 5 / WTP 5 / Winnable 5 / Referral 4) + JTBD 6-Part + 5 User Stories + 6 Test Scenarios + Pre-mortem Top 3 + Negative-Reputation Loop Block narrative
+- **CTO Team** (cto-lead): Architectural Review APPROVE with CONCERNS — 3 BLOCKERs (controlScore→trustScore correction / ACTION_TYPES count 27→29 correction / NDJSON injection assessment) + 3 MEDIUMs (no-op audit noop:true / actor spoofing mitigation / sub-agent-dispatcher state transition test) all reflected in redline. Main session followed the Numeric Correction Protocol: ACTION_TYPES measured 29 (corrected the CTO's 27 grep limitation), trustScore model exists (`.bkit/state/trust-profile.json`)
+- **QA Team** (qa-lead): L1-L5 layer integrated verification report + reporter scenario evidence
 
 ### Differentiation 6/6 Strengthening
 
-- ENH-286 Memory Enforcer — 무영향 (trust mutation CLAUDE.md 의존 없음)
-- ENH-289 Defense Layer 6 — **강화** (sprint_trust_changed audit이 Layer 6 pipeline에 자연 합류, 라이브 입증: `.bkit/audit/2026-05-21.jsonl`에 `layer_6_audit_completed` + `layer_6_alarm_triggered` 동시 emit)
-- ENH-292 Sequential Dispatch — **활성화 milestone** (F1 fix로 sprint-orchestrator Task tool 정상 작동, "선언 → 실작동" 승격 첫 release)
-- ENH-300 Effort-aware Adaptive Defense — 직교 무영향 (effort.level과 trust 별개 축)
-- ENH-303 PostToolUse continueOnBlock — 무영향
-- ENH-310 Heredoc Detector — 무영향 (본 sprint commit 시 heredoc 미사용)
+- ENH-286 Memory Enforcer — no impact (trust mutation has no CLAUDE.md dependence)
+- ENH-289 Defense Layer 6 — **strengthened** (sprint_trust_changed audit naturally joined the Layer 6 pipeline, live proof: `layer_6_audit_completed` + `layer_6_alarm_triggered` emitted simultaneously in `.bkit/audit/2026-05-21.jsonl`)
+- ENH-292 Sequential Dispatch — **activation milestone** (F1 fix makes sprint-orchestrator Task tool work normally, first release promoting "declared → actually working")
+- ENH-300 Effort-aware Adaptive Defense — orthogonal, no impact (effort.level and trust are separate axes)
+- ENH-303 PostToolUse continueOnBlock — no impact
+- ENH-310 Heredoc Detector — no impact (heredoc unused in this sprint's commits)
 
 ### Compatibility
 
-- **bkit v2.1.18 GA** (bkit.config.json + .claude-plugin/plugin.json 동시 갱신)
-- Backward compat 100%: 기존 `--trustLevel L<N>` 사용자 precedence 보존 (F3 Case G test), 기존 sprint state schema 무변경
-- ADR 0003 14/14 PASS 유지 (15-cycle → **16-cycle consistency milestone**)
+- **bkit v2.1.18 GA** (bkit.config.json + .claude-plugin/plugin.json updated simultaneously)
+- Backward compat 100%: existing `--trustLevel L<N>` user precedence preserved (F3 Case G test), existing sprint state schema unchanged
+- ADR 0003 14/14 PASS maintained (15-cycle → **16-cycle consistency milestone**)
 
 ### Documentation
 
 - `docs/00-pm/features/v2118-sprint-trust-ux-fix.prd.md` (PM Team, ~570 lines)
-- `docs/01-plan/features/v2118-sprint-trust-ux-fix.plan.md` (CTO redline 5건 반영)
-- `docs/02-design/features/v2118-sprint-trust-ux-fix.design.md` (CTO redline 10건 반영, 778+ lines)
+- `docs/01-plan/features/v2118-sprint-trust-ux-fix.plan.md` (5 CTO redlines reflected)
+- `docs/02-design/features/v2118-sprint-trust-ux-fix.design.md` (10 CTO redlines reflected, 778+ lines)
 - `docs/05-qa/v2118-sprint-trust-ux-fix.qa-report.md` (QA Team)
 - `docs/04-report/features/v2118-sprint-trust-ux-fix.report.md` (Sprint completion)
-- `skills/sprint/SKILL.md` §10.1.3 신규 섹션
+- `skills/sprint/SKILL.md` §10.1.3 new section
 - `commands/bkit.md` `/sprint trust` help
 
 ### Closed Issues
@@ -391,67 +1242,67 @@ S0 + S1 + S4 + S2 + S3 + S5 모두 PDCA-with-sprint-shadow 으로 완주. Master
 
 ## [2.1.17] - 2026-05-20 (branch: `feature/v2117-final`)
 
-> **Status**: CI/CD Hardening — 5/12 ~ 5/20 8-day red contract class 영구 종결. **5축 매트릭스 5/5 close** (Detection, Enforcement, Recovery, Governance, Evolution).
+> **Status**: CI/CD Hardening — permanently closed the 5/12 ~ 5/20 8-day red contract class. **5-axis matrix 5/5 close** (Detection, Enforcement, Recovery, Governance, Evolution).
 > **Scope**: 2 PR merge — PR #97 (v2117 main scope) + PR #99 (v2117 final + 5 carryover absorbed).
-> **Origin**: commit `967cd8f` (refactor v2.1.13, 2026-05-12)에서 6 `pdca-eval-*` agent 제거 → 8일 누적 contract red. v2.1.15, v2.1.16 GA가 red 상태로 release 진행. 본 v2.1.17 release로 사고 클래스 모든 잔여 결함 해소.
+> **Origin**: removing 6 `pdca-eval-*` agents in commit `967cd8f` (refactor v2.1.13, 2026-05-12) → 8-day cumulative contract red. v2.1.15 and v2.1.16 GA proceeded with release in the red state. This v2.1.17 release resolves all remaining defects of the incident class.
 
-### Added — 5축 매트릭스 close
+### Added — 5-axis matrix close
 
-#### Detection (검출)
-- **Dual baseline**: v2.1.9 LTS (long-term drift) + v2.1.16 Latest (noise floor) 동시 비교
-- **L2 mandatory**: `test/contract/l2-smoke.test.js` (98 TC) + `l2-hook-attribution.test.js` (13 TC) workflow 통합
-- **L3 mandatory**: `l3-mcp-compat.test.js` (92 TC) + `l3-mcp-runtime.test.js` (48 TC) workflow 통합
-- **L5 mandatory**: `invocation-inventory.test.js` `continue-on-error: true` 제거 + `needs: contract-l1-l4` (203 TC → 210 TC with SoT-driven lists)
-- **MCP deprecation schema**: `// @deprecated since vX.X.X replacedBy=Y` 인라인 주석 파싱 (`parseMCPToolBlocks`)
-- **`scripts/check-test-tracking.js`**: 18 production test 경로의 untracked `*.test.js` 검출 (CO-7)
+#### Detection
+- **Dual baseline**: simultaneous comparison of v2.1.9 LTS (long-term drift) + v2.1.16 Latest (noise floor)
+- **L2 mandatory**: `test/contract/l2-smoke.test.js` (98 TC) + `l2-hook-attribution.test.js` (13 TC) integrated into workflow
+- **L3 mandatory**: `l3-mcp-compat.test.js` (92 TC) + `l3-mcp-runtime.test.js` (48 TC) integrated into workflow
+- **L5 mandatory**: removed `continue-on-error: true` from `invocation-inventory.test.js` + `needs: contract-l1-l4` (203 TC → 210 TC with SoT-driven lists)
+- **MCP deprecation schema**: parsing of `// @deprecated since vX.X.X replacedBy=Y` inline comments (`parseMCPToolBlocks`)
+- **`scripts/check-test-tracking.js`**: detects untracked `*.test.js` across 18 production test paths (CO-7)
 
-#### Enforcement (강제)
-- **`scripts/setup-branch-protection.sh`**: idempotent `gh api` wrapper (dry-run default + `--apply`). main 브랜치에 자동 적용됨 — Required Status Check 2개 (`Contract Test (L1 Frontmatter + L4 Deprecation)`, `Contract Test L5 (Invocation Inventory)`), `allow_force_pushes: false`, `allow_deletions: false`, `strict: true`.
+#### Enforcement
+- **`scripts/setup-branch-protection.sh`**: idempotent `gh api` wrapper (dry-run default + `--apply`). Automatically applied to the main branch — 2 Required Status Checks (`Contract Test (L1 Frontmatter + L4 Deprecation)`, `Contract Test L5 (Invocation Inventory)`), `allow_force_pushes: false`, `allow_deletions: false`, `strict: true`.
 - **`docs/06-guide/branch-protection-setup.guide.md`**: admin SOP
 
-#### Recovery (복구)
-- **`docs/06-guide/contract-baseline-rollforward.guide.md`**: LTS vs Latest 정책, 의사결정 트리, 캡처 절차, deprecation stub 작성, PR self-review 체크리스트, 사고 기록 (8 section)
-- **`docs/06-guide/test-file-tracking-policy.guide.md`**: `.gitignore` policy + PR checklist + 사고 기록 (9 section)
+#### Recovery
+- **`docs/06-guide/contract-baseline-rollforward.guide.md`**: LTS vs Latest policy, decision tree, capture procedure, deprecation stub authoring, PR self-review checklist, incident record (8 sections)
+- **`docs/06-guide/test-file-tracking-policy.guide.md`**: `.gitignore` policy + PR checklist + incident record (9 sections)
 
-#### Governance (거버넌스)
-- **Agent deprecation governance**: `agents/<name>.md` frontmatter에 `deprecatedIn: vX.X.X` 명시 시 L4 우회 — Skill 패턴 대칭 적용
-- **6 `pdca-eval-*` deprecation tombstones**: `agents/pdca-eval-{act,check,design,do,plan,pm}.md` — `deprecatedReason`, `replacedBy`, `deprecationCommit: 967cd8f` 명시
-- **MCP tool deprecation governance**: baseline JSON `deprecatedIn` 필드 기반 L4 우회 (`contract-test-run.js` Skill/Agent/MCP 3 surface 대칭)
-- **Agent-deprecation isolated test** (CO-4): `test/contract/agent-deprecation.test.js` 5 scenario fixture (positive, missing-stub, no-deprecated-in, model-mismatch, non-mutation), 5/5 PASS
-- **MCP-deprecation e2e test** (CO-2.1): `test/contract/mcp-deprecation.test.js` 6 scenario fixture (active, simple, full, JSDoc-style 외), 6/6 PASS
+#### Governance
+- **Agent deprecation governance**: L4 bypass when `deprecatedIn: vX.X.X` is specified in `agents/<name>.md` frontmatter — symmetrically applied with the Skill pattern
+- **6 `pdca-eval-*` deprecation tombstones**: `agents/pdca-eval-{act,check,design,do,plan,pm}.md` — `deprecatedReason`, `replacedBy`, `deprecationCommit: 967cd8f` specified
+- **MCP tool deprecation governance**: L4 bypass based on the baseline JSON `deprecatedIn` field (`contract-test-run.js` Skill/Agent/MCP 3-surface symmetry)
+- **Agent-deprecation isolated test** (CO-4): `test/contract/agent-deprecation.test.js` 5 scenario fixtures (positive, missing-stub, no-deprecated-in, model-mismatch, non-mutation), 5/5 PASS
+- **MCP-deprecation e2e test** (CO-2.1): `test/contract/mcp-deprecation.test.js` 6 scenario fixtures (active, simple, full, JSDoc-style, etc.), 6/6 PASS
 
-#### Evolution (진화)
-- **`lib/util/frontmatter.js`** (CO-5): 5 site duplication 통합 — `parseFrontmatter`, `parseFrontmatterFile`, `hasDeprecatedInFrontmatter`, `hasDeprecatedInFrontmatterFile`, `coerce` (pure FS-free 핵심)
-- **v2.1.16 baseline 추가 캡처**: `test/contract/baseline/v2.1.16/` (106 file) — 다음 PDCA 작업의 noise floor 기준
-- **SoT canonical names list** (CO-3.1): `lib/domain/rules/docs-code-invariants.js`에 `EXPECTED_ACTIVE_AGENT_NAMES` (34), `EXPECTED_DEPRECATED_AGENT_NAMES` (6), `EXPECTED_SKILL_NAMES` (44), `EXPECTED_HOOK_EVENT_NAMES` (21), `EXPECTED_PDCA_MCP_TOOLS` (13), `EXPECTED_ANALYSIS_MCP_TOOLS` (6) 추가 — invocation-inventory.test.js가 dynamic 참조
+#### Evolution
+- **`lib/util/frontmatter.js`** (CO-5): consolidated 5-site duplication — `parseFrontmatter`, `parseFrontmatterFile`, `hasDeprecatedInFrontmatter`, `hasDeprecatedInFrontmatterFile`, `coerce` (pure FS-free core)
+- **v2.1.16 baseline additional capture**: `test/contract/baseline/v2.1.16/` (106 files) — noise floor reference for the next PDCA work
+- **SoT canonical names list** (CO-3.1): added `EXPECTED_ACTIVE_AGENT_NAMES` (34), `EXPECTED_DEPRECATED_AGENT_NAMES` (6), `EXPECTED_SKILL_NAMES` (44), `EXPECTED_HOOK_EVENT_NAMES` (21), `EXPECTED_PDCA_MCP_TOOLS` (13), `EXPECTED_ANALYSIS_MCP_TOOLS` (6) to `lib/domain/rules/docs-code-invariants.js` — dynamically referenced by invocation-inventory.test.js
 
 ### Fixed
 
-#### Framework 부작용
-- **collect 함수 implicit write 부작용 차단**: `collectSkills/Agents/MCPTools/Hooks/SlashCommands` 5개 함수에 `{ persist = true, baseDir = BASE_DIR, projectRoot = PROJECT_ROOT }` 옵션 추가. contract-test-run.js가 `{ persist: false }` 명시로 baseline self-mutation 차단.
-- **`--version` 인자 path-injection validation** (CO-1.1): `^[A-Za-z0-9._-]+$` 정규식 미일치 시 exit 2 (`/tmp/foo` 같은 path concat 사고 방지)
+#### Framework side effects
+- **Blocked collect-function implicit write side effects**: added `{ persist = true, baseDir = BASE_DIR, projectRoot = PROJECT_ROOT }` options to the 5 functions `collectSkills/Agents/MCPTools/Hooks/SlashCommands`. contract-test-run.js blocks baseline self-mutation by explicitly passing `{ persist: false }`.
+- **`--version` argument path-injection validation** (CO-1.1): exit 2 on mismatch with the `^[A-Za-z0-9._-]+$` regex (preventing path-concat accidents like `/tmp/foo`)
 - **`--project-root` flag** (CO-4 prerequisite): contract-test-run.js + contract-baseline-collect.js — fixture-aware testing
 
-#### `.gitignore` 위장 결함 해소 (CO-6)
-- **`test/`, `tests/*` blanket ignore 제거** — production test 디렉터리 default tracked. 5/20 사고 클래스 (`Cannot find module` 위장) 영구 차단.
-- **35+ 잔여 untracked test files 일괄 추적**: `tests/qa/` 29 file (bug-fixes-v218, v2113-sprint-1~5, v2114-* 10개, v2116-* 3개 등) + `test/contract/` 5 file + `test/e2e/` 6 file + `test/integration/` 3 file + `test/unit/` 2 file + `test/v2110-qa/` 2 file
-- **`docs-code-scanner.js` `countAgents`**: deprecation tombstone 제외 (active count 정합성)
-- **5/20 release 위장 결함 정상화**: `tests/qa/bkit-full-system.test.js`, `bkit-deep-system.test.js`, `test/contract/l2-hook-attribution.test.js`, `l3-mcp-runtime.test.js` 4 file force-tracked (v2.1.17 PR #97 + 본 PR)
+#### `.gitignore` masquerade defect resolved (CO-6)
+- **Removed `test/`, `tests/*` blanket ignore** — production test directories tracked by default. Permanently blocks the 5/20 incident class (`Cannot find module` masquerade).
+- **Bulk-tracked 35+ remaining untracked test files**: `tests/qa/` 29 files (bug-fixes-v218, v2113-sprint-1~5, 10 v2114-*, 3 v2116-*, etc.) + `test/contract/` 5 files + `test/e2e/` 6 files + `test/integration/` 3 files + `test/unit/` 2 files + `test/v2110-qa/` 2 files
+- **`docs-code-scanner.js` `countAgents`**: excludes deprecation tombstones (active count consistency)
+- **5/20 release masquerade defect normalized**: `tests/qa/bkit-full-system.test.js`, `bkit-deep-system.test.js`, `test/contract/l2-hook-attribution.test.js`, `l3-mcp-runtime.test.js` 4 files force-tracked (v2.1.17 PR #97 + this PR)
 
 #### Hygiene
-- **v2.1.9 baseline 12 orphan JSON 삭제**: manifest 미등재 (sprint agents/MCP tools/skills) — runner 동작 무관하나 baseline hygiene 손상. 정리 후 `node test/contract/scripts/contract-test-run.js --compare v2.1.9 --level L1,L4` 252 → 234 assertions (의미 없는 12 assertion 제거).
-- **`scripts/check-deadcode.js` EXEMPT 패턴 보완**: v2.1.13 sprint barrel 3 file (`lib/{application/sprint-lifecycle,domain/sprint,infra/sprint}/index.js`) EXEMPT 추가. 5/12 이전부터 잠재된 결함이 Invocation Contract red로 위장되어 있었음.
+- **Deleted 12 orphan JSON in v2.1.9 baseline**: not registered in manifest (sprint agents/MCP tools/skills) — irrelevant to runner operation but damaging baseline hygiene. After cleanup, `node test/contract/scripts/contract-test-run.js --compare v2.1.9 --level L1,L4` 252 → 234 assertions (removed 12 meaningless assertions).
+- **Supplemented `scripts/check-deadcode.js` EXEMPT patterns**: added EXEMPT for v2.1.13 sprint barrel 3 files (`lib/{application/sprint-lifecycle,domain/sprint,infra/sprint}/index.js`). A defect latent since before 5/12 had been masquerading as Invocation Contract red.
 
 ### Changed
 
-- **`.github/workflows/contract-check.yml`**: 13 → **18 step** (+1 dual baseline 비교, +4 L2/L3, +1 check-test-tracking, +L5 mandatory needs)
-- **agents count semantics**: "total" → **"active" (34) + "deprecated" (6)**. SoT (`docs-code-invariants.js`) `agents: 34` 유지, count 측정 5 site에서 filter 적용.
-- **workflow L5 job name**: "관찰 전용 — 머지 차단 아님" → **"Invocation Inventory"** (mandatory)
+- **`.github/workflows/contract-check.yml`**: 13 → **18 steps** (+1 dual baseline comparison, +4 L2/L3, +1 check-test-tracking, +L5 mandatory needs)
+- **agents count semantics**: "total" → **"active" (34) + "deprecated" (6)**. Kept the SoT (`docs-code-invariants.js`) `agents: 34`, applying a filter at the 5 count-measurement sites.
+- **workflow L5 job name**: "observe-only — not merge-blocking" → **"Invocation Inventory"** (mandatory)
 
 ### Architecture
 
 #### New Layer
-- **`lib/util/`** (NEW utility layer) — pure FS-free modules. 첫 module: `frontmatter.js`.
+- **`lib/util/`** (NEW utility layer) — pure FS-free modules. First module: `frontmatter.js`.
 
 #### New Modules / Scripts
 - `lib/util/frontmatter.js` (75 LOC, pure)
@@ -465,7 +1316,7 @@ S0 + S1 + S4 + S2 + S3 + S5 모두 PDCA-with-sprint-shadow 으로 완주. Master
 
 ### Verification
 
-로컬 dry-run 18/18 PASS:
+Local dry-run 18/18 PASS:
 - domain purity: 18 files, 0 forbidden
 - L1+L4 vs v2.1.9 LTS: 234 assertions
 - L1+L4 vs v2.1.16 Latest: 255 assertions
@@ -486,39 +1337,39 @@ S0 + S1 + S4 + S2 + S3 + S5 모두 PDCA-with-sprint-shadow 으로 완주. Master
 - docs-code-sync test: 36/36
 - branch-protection script (dry-run): preview valid
 
-**qa-aggregate**: 4090+ PASS / 0 FAIL / 0 Errors (v2.1.16 GA의 3,808 PASS / 31 FAIL / 4 Errors 대비 35건 회귀 close + 280+ TC 증가)
+**qa-aggregate**: 4090+ PASS / 0 FAIL / 0 Errors (closed 35 regressions + 280+ TC increase versus v2.1.16 GA's 3,808 PASS / 31 FAIL / 4 Errors)
 
-### Closure 매트릭스
+### Closure matrix
 
-| 항목 | v2.1.16 GA | v2.1.17 |
+| Item | v2.1.16 GA | v2.1.17 |
 |------|:---:|:---:|
-| Contract red 누적 | 8일 | **0일** |
+| Cumulative Contract red | 8 days | **0 days** |
 | Workflow steps (mandatory) | 13 | **18** |
 | Baseline snapshots | 1 (v2.1.9) | **2 (v2.1.9 LTS + v2.1.16 Latest)** |
 | Active agents | 34 | 34 (with explicit deprecation governance) |
 | Deprecation tombstones | 0 | **6** |
 | Frontmatter parse sites | 5 (duplicate) | **1** (`lib/util/frontmatter.js`) |
 | Hardcoded EXPECTED lists | 7 (stale-prone) | **0** (SoT `docs-code-invariants.js`) |
-| Branch protection | ✗ | **Required Status Checks 2개 자동 적용** |
-| 5축 매트릭스 | 0/5 | **5/5** ✅ |
+| Branch protection | ✗ | **2 Required Status Checks auto-applied** |
+| 5-axis matrix | 0/5 | **5/5** ✅ |
 
-### Closure 항목 (Carryover 영구 종결)
+### Closure items (Carryover permanently closed)
 
 | ID | Description | Status |
 |----|-------------|:---:|
-| CO-1 | Branch protection 자동화 | ✅ script + apply 적용 완료 |
+| CO-1 | Branch protection automation | ✅ script + apply completed |
 | CO-1.1 | --version path-injection validation | ✅ regex validation |
-| CO-2 | MCP tool deprecation schema 정형화 | ✅ `parseMCPToolBlocks` |
-| CO-2.1 | MCP deprecation 실전 e2e test | ✅ 6/6 PASS |
-| CO-3 | L5 E2E mandatory 승격 | ✅ continue-on-error 제거 |
-| CO-3.1 | L5 inventory dynamic EXPECTED lists | ✅ SoT 통합 (210/210) |
+| CO-2 | MCP tool deprecation schema formalization | ✅ `parseMCPToolBlocks` |
+| CO-2.1 | MCP deprecation real-world e2e test | ✅ 6/6 PASS |
+| CO-3 | L5 E2E mandatory promotion | ✅ continue-on-error removed |
+| CO-3.1 | L5 inventory dynamic EXPECTED lists | ✅ SoT consolidated (210/210) |
 | CO-4 | Agent-deprecation isolated unit test | ✅ 5/5 PASS |
-| CO-5 | frontmatter util 추출 | ✅ 5 site → 1 |
-| CO-6 | Tracked file policy | ✅ .gitignore narrow + 35+ file 추적 + 가이드 |
-| CO-7 | tests/qa dependency 자동화 | ✅ check-test-tracking.js + workflow step |
-| CO-8 | branch-protection 실제 apply audit | ✅ popup-kay admin 적용 검증 |
+| CO-5 | frontmatter util extraction | ✅ 5 sites → 1 |
+| CO-6 | Tracked file policy | ✅ .gitignore narrow + 35+ files tracked + guide |
+| CO-7 | tests/qa dependency automation | ✅ check-test-tracking.js + workflow step |
+| CO-8 | branch-protection actual apply audit | ✅ popup-kay admin apply verified |
 
-**11 carryover 항목 모두 close** — 5/12 ~ 5/20 사고 클래스 완전 종결.
+**All 11 carryover items closed** — 5/12 ~ 5/20 incident class completely closed.
 
 ### References
 
@@ -532,207 +1383,207 @@ S0 + S1 + S4 + S2 + S3 + S5 모두 PDCA-with-sprint-shadow 으로 완주. Master
 
 ## [2.1.16] - 2026-05-20 (branch: `feature/v2116-issue-fixes`)
 
-> **Status**: Patch release — 4 GitHub issues 종결 (Quality Gates & Approval UX).
-> **Reporter**: @pruge (v2.1.14, CC v2.1.140, L2 trust) — L2 기본 사용자가 sprint 진행 중 quality gate에 의해 발생하는 deadlock 4종을 사용자 명시 명령으로 해소.
+> **Status**: Patch release — 4 GitHub issues closed (Quality Gates & Approval UX).
+> **Reporter**: @pruge (v2.1.14, CC v2.1.140, L2 trust) — an L2 default user resolved 4 types of deadlock caused by quality gates during sprint execution via user-explicit commands.
 
 ### Fixed — Issue #92: sprint-orchestrator M4+M8 dual record at design exit (F1)
 
-`sprint-orchestrator` agent가 design phase §14 self-assessment 종료 시 `M8_designCompleteness`만 기록하고 `M4_apiComplianceRate`를 누락 → `evaluateGate(null)` returns `reason: 'not_measured'` → `advancePhase` returns `reason: 'gate_fail'` → start-sprint loop가 `QUALITY_GATE_FAIL`로 pause. L2 사용자 deadlock.
+When the `sprint-orchestrator` agent completed the design phase §14 self-assessment, it recorded only `M8_designCompleteness` and omitted `M4_apiComplianceRate` → `evaluateGate(null)` returns `reason: 'not_measured'` → `advancePhase` returns `reason: 'gate_fail'` → the start-sprint loop pauses with `QUALITY_GATE_FAIL`. L2 user deadlock.
 
-- **agent body §96-102 Quality Standards 확장** + **Design Phase Exit Procedure 신설** — orchestrator가 design exit 전 M4 + M8 둘 다 측정 책임 명시 (Option A, Issue #92 reporter suggested).
-- **quality-gates.js JSDoc evolution** — measurement responsibility 명시 (single SoT per gate). Logic 무변경 (Master Plan §1 RISK invariant — gate matrix target 동일).
-- **Cross-Sprint Integration (F3 ships 후)**: agent body가 `measure-router.measureGate('M4', sprint, { agentTaskRunner })` 호출 명시 — `/sprint phase` 자동 advance와 `/sprint measure --gate M4` 수동 호출이 단일 SoT 공유.
-- **Contract test SC-11 신규** — Sprint 2 quality-gates logic structural invariant (legacy git-diff freeze evolution, INV-05 hooks.json 패턴).
+- **Expanded agent body §96-102 Quality Standards** + **new Design Phase Exit Procedure** — explicitly states the orchestrator's responsibility to measure both M4 and M8 before design exit (Option A, Issue #92 reporter suggested).
+- **quality-gates.js JSDoc evolution** — clarified measurement responsibility (single SoT per gate). Logic unchanged (Master Plan §1 RISK invariant — gate matrix target identical).
+- **Cross-Sprint Integration (after F3 ships)**: agent body explicitly calls `measure-router.measureGate('M4', sprint, { agentTaskRunner })` — `/sprint phase` auto-advance and the `/sprint measure --gate M4` manual call share a single SoT.
+- **New contract test SC-11** — Sprint 2 quality-gates logic structural invariant (legacy git-diff freeze evolution, INV-05 hooks.json pattern).
 - Atomic commit `b8f85b9`.
 
 ### Added — Issue #95: `/sprint phase --approve` scope-boundary single-use escape hatch (F2)
 
-L2 trust (`scope.stopAfter = "design"`, `requireApproval = true`)에서 `/sprint phase --to do` 호출 시 `requires_user_approval` 반환되지만 사용자가 approval 줄 명령 없음 → deadlock. workaround는 trust escalation 또는 state JSON 직접 편집 (bkit 철학 위반).
+Under L2 trust (`scope.stopAfter = "design"`, `requireApproval = true`), calling `/sprint phase --to do` returns `requires_user_approval`, but the user has no command to grant approval → deadlock. The workaround was trust escalation or directly editing the state JSON (a violation of the bkit philosophy).
 
-- **`--approve` flag (단일 호출 escape hatch)** + optional `--reason "<text>"` — `sprint.autoRun.scope` 무변경 (single-use), 다음 phase 전이 시 재차 scope check.
-- **`audit-logger.ACTION_TYPES.scope_boundary_approved` 신규** (28번째) + details schema `{ sprintId, from, to, trustLevel, stopAfter, approvedBy, reason }`.
-- **`advance-phase.usecase.js` Step 2 확장** — `deps.approve === true` 시 scope check skip + `approvalRecord` 반환. Pure-module 유지 (handler가 audit emit).
-- **`advancePhase` 응답에 `hint` field 추가** — legacy `requires_user_approval` 결과에 사용자 안내 ("Re-run with --approve. Approval is single-use and does NOT change trust level.").
-- **SKILL.md §10.1 phase row 확장 + §10.1.1 dedicated semantics section** (R4 misunderstanding mitigation).
-- **Contract test SC-12 신규** — 7 behavioral assertions + handler E2E.
+- **`--approve` flag (single-call escape hatch)** + optional `--reason "<text>"` — `sprint.autoRun.scope` unchanged (single-use), scope check re-runs on the next phase transition.
+- **New `audit-logger.ACTION_TYPES.scope_boundary_approved`** (28th) + details schema `{ sprintId, from, to, trustLevel, stopAfter, approvedBy, reason }`.
+- **Expanded `advance-phase.usecase.js` Step 2** — skips scope check when `deps.approve === true` + returns `approvalRecord`. Stays a pure module (the handler emits audit).
+- **Added a `hint` field to the `advancePhase` response** — provides user guidance on the legacy `requires_user_approval` result ("Re-run with --approve. Approval is single-use and does NOT change trust level.").
+- **SKILL.md §10.1 phase row expansion + §10.1.1 dedicated semantics section** (R4 misunderstanding mitigation).
+- **New contract test SC-12** — 7 behavioral assertions + handler E2E.
 - Atomic commit `3c615fd`.
 
 ### Added — Issue #94: `/sprint measure` partial-gate measurement command (F3)
 
-quality gate가 null (not_measured)이고 phase 전이 차단 시 사용자가 단일 gate 측정할 명령 없음. 기존 `/sprint phase`/`/sprint iterate`/`/sprint qa`는 전체 workflow advance 또는 다른 scope. 측정 작업은 subagent (gap-detector, code-analyzer, sprint-orchestrator)가 수행하지만 user-invokable slash command 없음.
+When a quality gate is null (not_measured) and the phase transition is blocked, the user has no command to measure a single gate. The existing `/sprint phase`/`/sprint iterate`/`/sprint qa` either advance the whole workflow or have a different scope. Measurement work is performed by subagents (gap-detector, code-analyzer, sprint-orchestrator), but there is no user-invokable slash command.
 
-- **`lib/application/quality-gates/measure-router.js` 신규 디렉토리 + 모듈** — gateKey → agent 매핑 (Master Plan §11.3 AC4): M1/M3/M4 → gap-detector, M2/M7 → code-analyzer, M8 → sprint-orchestrator, S1 → sprint-qa-flow. 7 supported gates × 4 agents + 4 unsupported (M5/M10/S2/S4 carry to v2.1.17). Pure module — `agentTaskRunner` inject, 6 deterministic error reasons (no silent fail).
-- **`lib/application/sprint-lifecycle/measure-gate.usecase.js` 신규** — Trust Level scope (L0/L1 preview / L2+ record), sequential aggregators (ENH-292 cache-friendly): `measureGate` / `measureGates` / `measurePhaseGates`.
-- **`audit-logger.ACTION_TYPES.gate_measured` 신규** (29번째) + 11-field details (sprintId/gateKey/field/agent/value/threshold/passed/source/phase/trustLevel/previousValue). Preview mode (L0/L1) NO audit (noise 0).
-- **`sprint-handler.js` 17번째 VALID_ACTION `measure`** — 3 modes precedence (`--gate` > `--gates` CSV > `--phase`), per-gate gate_measured audit emit, cumulative state save.
-- **F1 self-assessment refactor — single SoT 통합** — agent body가 inline §14 heuristic 제거 → measure-router 호출 명시 (Master Plan AC7 code-sharing).
-- **SKILL.md §10.1 measure row + §10.1.2 dedicated semantics section** (agent routing table, Trust Level scope 명시).
-- **Contract test SC-13 신규** — 8 assertion groups (router routing, error paths, UC modes, aggregators, handler E2E, F1 cross-reference invariant).
+- **New directory + module `lib/application/quality-gates/measure-router.js`** — gateKey → agent mapping (Master Plan §11.3 AC4): M1/M3/M4 → gap-detector, M2/M7 → code-analyzer, M8 → sprint-orchestrator, S1 → sprint-qa-flow. 7 supported gates × 4 agents + 4 unsupported (M5/M10/S2/S4 carry to v2.1.17). Pure module — inject `agentTaskRunner`, 6 deterministic error reasons (no silent fail).
+- **New `lib/application/sprint-lifecycle/measure-gate.usecase.js`** — Trust Level scope (L0/L1 preview / L2+ record), sequential aggregators (ENH-292 cache-friendly): `measureGate` / `measureGates` / `measurePhaseGates`.
+- **New `audit-logger.ACTION_TYPES.gate_measured`** (29th) + 11-field details (sprintId/gateKey/field/agent/value/threshold/passed/source/phase/trustLevel/previousValue). Preview mode (L0/L1) emits NO audit (0 noise).
+- **17th VALID_ACTION `measure` in `sprint-handler.js`** — 3 modes precedence (`--gate` > `--gates` CSV > `--phase`), per-gate gate_measured audit emit, cumulative state save.
+- **F1 self-assessment refactor — single SoT consolidation** — agent body removes the inline §14 heuristic → explicitly calls measure-router (Master Plan AC7 code-sharing).
+- **SKILL.md §10.1 measure row + §10.1.2 dedicated semantics section** (agent routing table, Trust Level scope clarified).
+- **New contract test SC-13** — 8 assertion groups (router routing, error paths, UC modes, aggregators, handler E2E, F1 cross-reference invariant).
 - Atomic commit `126a7c0`.
 
 ### Added — Issue #93: Gate-failure auto-report at advancePhase gate_fail (F4)
 
-`gate_fail` 시 raw JSON 한 줄만 stderr 출력 + disk 작성 0. 사용자가 LLM 해석 의존 (bkit "controllable AI" 철학 위반).
+On `gate_fail`, only a single line of raw JSON was printed to stderr + 0 disk writes. Users had to rely on LLM interpretation (a violation of the bkit "controllable AI" philosophy).
 
-- **`templates/gate-failure-report.template.md` 신규** — 6열 표 outer skeleton (Sprint Phase / Gate / Status / Expected / Actual / Suggested Action per Issue #93 example) + `{gateRows}/{failedGateBlocks}/{passingGateBlocks}` placeholder.
-- **`lib/application/quality-gates/failure-reporter.js` 신규** — 3-tier pattern (pure builders + side-effect writeReport + createFailureReporter factory). PLUGIN_ROOT vs projectRoot 분리 (template lookup ↔ output dir).
-- **`advance-phase.usecase.js` Step 3 gate_fail 분기 통합** — `deps.failureReporter` dispatch (best-effort, never blocks), `sprint.lastGateFailure { phase, toPhase, gateResults, reportPath, timestamp }` 동적 추가 (Sprint 1 domain 무변경, INV-01 안전), 응답에 reportPath + sprint 추가.
-- **`audit-logger.gate_failed` details schema 확장** (no new enum — re-use). 11-field details (sprintId/phase/targetPhase/failedGates[]/reportPath).
-- **`audit-logger.sanitizeDetails` Array preservation (generalized fix)** — v2.1.10 sanitizeDetails가 Array를 `{ '0': {...} }` Object로 coerce하던 잠재 회귀를 F4가 발견 + Array branch 추가. 모든 미래 audit array fields에 benefit.
-- **sprint-handler `handlePhase` 확장** — `buildFailureReporterForHandler` (fileWriter inject) + state save on gate_fail + gate_failed audit emit (expanded details).
-- **per-call opts merging** (`createFailureReporter`) — toPhase는 advancePhase 호출 시점에만 알 수 있음 → per-call opts merged with factory opts.
-- **Cross-feature enrichment (AC7)** — report Suggested Action column이 `not_measured` → F3 `/sprint measure --gate <K>` command, Next User Commands 섹션이 F2 `--approve` + F3 `/sprint measure` substituted with sprintId/toPhase.
-- **Contract test SC-14 신규** — 7 assertion groups + handler E2E (temp project root, audit log file content verification).
+- **New `templates/gate-failure-report.template.md`** — 6-column table outer skeleton (Sprint Phase / Gate / Status / Expected / Actual / Suggested Action per Issue #93 example) + `{gateRows}/{failedGateBlocks}/{passingGateBlocks}` placeholders.
+- **New `lib/application/quality-gates/failure-reporter.js`** — 3-tier pattern (pure builders + side-effect writeReport + createFailureReporter factory). PLUGIN_ROOT vs projectRoot separation (template lookup ↔ output dir).
+- **Integrated `advance-phase.usecase.js` Step 3 gate_fail branch** — `deps.failureReporter` dispatch (best-effort, never blocks), dynamic addition of `sprint.lastGateFailure { phase, toPhase, gateResults, reportPath, timestamp }` (Sprint 1 domain unchanged, INV-01 safe), reportPath + sprint added to the response.
+- **Expanded `audit-logger.gate_failed` details schema** (no new enum — re-use). 11-field details (sprintId/phase/targetPhase/failedGates[]/reportPath).
+- **`audit-logger.sanitizeDetails` Array preservation (generalized fix)** — F4 discovered a latent regression where v2.1.10 sanitizeDetails coerced an Array into a `{ '0': {...} }` Object + added an Array branch. Benefits all future audit array fields.
+- **Expanded sprint-handler `handlePhase`** — `buildFailureReporterForHandler` (inject fileWriter) + state save on gate_fail + gate_failed audit emit (expanded details).
+- **per-call opts merging** (`createFailureReporter`) — toPhase is only known at the moment advancePhase is called → per-call opts merged with factory opts.
+- **Cross-feature enrichment (AC7)** — the report Suggested Action column maps `not_measured` → the F3 `/sprint measure --gate <K>` command, and the Next User Commands section substitutes the F2 `--approve` + F3 `/sprint measure` with sprintId/toPhase.
+- **New contract test SC-14** — 7 assertion groups + handler E2E (temp project root, audit log file content verification).
 - Atomic commit `72559ce`.
 
 ### Changed — Cross-Feature Invariant Evolution
 
-- **`tests/contract/v2113-sprint-contracts.test.js` SC-04/SC-06 갱신**:
-  - SC-04: VALID_ACTIONS 16 → **17** (`measure` 추가)
+- **Updated `tests/contract/v2113-sprint-contracts.test.js` SC-04/SC-06**:
+  - SC-04: VALID_ACTIONS 16 → **17** (added `measure`)
   - SC-06: ACTION_TYPES 27 → **29** (scope_boundary_approved + gate_measured, evolved from regex source-text counting to module-level assertion to avoid JSDoc literal false-positives)
 - **`tests/qa/v2113-sprint-4-presentation.test.js` INV-02/H-01/AUDIT-01 evolved** (local-only, `.gitignore tests/qa/*`):
-  - INV-02: git diff freeze → logic structure invariant (INV-05 hooks.json 패턴)
+  - INV-02: git diff freeze → logic structure invariant (INV-05 hooks.json pattern)
   - H-01: VALID_ACTIONS 16 → 17
   - AUDIT-01: 27 → 29 (scope_boundary_approved + gate_measured)
-- **`test/unit/audit-logger.test.js` AL-007 evolved (16 → 29)** — v2.1.10 baseline 누적 evolution 갱신.
+- **`test/unit/audit-logger.test.js` AL-007 evolved (16 → 29)** — updated the cumulative evolution from the v2.1.10 baseline.
 
 ### Verification
 
-- **L3 Contract**: 14/14 PASS (SC-11/SC-12/SC-13/SC-14 신규, SC-04/SC-06 evolved)
-- **Tracked unit (test/unit/)**: 90/90 files PASS (AL-007 갱신 후)
+- **L3 Contract**: 14/14 PASS (SC-11/SC-12/SC-13/SC-14 new, SC-04/SC-06 evolved)
+- **Tracked unit (test/unit/)**: 90/90 files PASS (after AL-007 update)
 - **Tracked unit (tests/unit/)**: 3/3 files PASS
 - **bkit-deep-system**: 111/111 PASS
-- **sprint-2-application**: 79/79 PASS (회귀 0)
-- **sprint-3-infrastructure**: 66/66 PASS (회귀 0)
+- **sprint-2-application**: 79/79 PASS (0 regressions)
+- **sprint-3-infrastructure**: 66/66 PASS (0 regressions)
 - **sprint-4-presentation** (3 evolved tests): 41/41 PASS
 - **Local QA** (v2116-sprint-phase-approve 7 + v2116-sprint-measure-command 9 + v2116-gate-fail-report 8): 24/24 PASS
 - **Total tracked**: ~150+ test files / 478+ assertions, 0 FAIL
-- **claude plugin validate**: ✔ Exit 0 (F9-120 closure 17-cycle 확장)
+- **claude plugin validate**: ✔ Exit 0 (F9-120 closure 17-cycle extension)
 
 ### Live Dogfooding
 
-- **ENH-310 heredoc-bypass guard live-fire 3회 연속** (F1+F2+F3 atomic commit 시도에서 `git commit -m "$(cat <<EOF ... EOF)"` 패턴 차단) — bkit 차별화 #6 결정적 강화. -F file 방식으로 우회 (학습 적용 후 F4 commit은 trigger 없이 성공).
-- **audit-logger sanitizeDetails Array 회귀 발견 + generalized fix** — F4가 failedGates array를 audit 하면서 v2.1.10 회귀 발견. 모든 미래 audit entry array fields에 benefit.
-- **bkit v2.1.16 sprint 자체가 PDCA + Sprint Management의 self-dogfooding** — 4 GitHub issues가 bkit이 발견한 bkit 자체 deadlock 4건을 bkit 도구로 해소.
+- **ENH-310 heredoc-bypass guard live-fire 3 times in a row** (blocked the `git commit -m "$(cat <<EOF ... EOF)"` pattern in the F1+F2+F3 atomic commit attempts) — decisive reinforcement of bkit differentiator #6. Bypassed via the -F file approach (after applying the lesson, the F4 commit succeeded without triggering it).
+- **audit-logger sanitizeDetails Array regression discovered + generalized fix** — F4 discovered the v2.1.10 regression while auditing the failedGates array. Benefits the array fields of all future audit entries.
+- **The bkit v2.1.16 sprint itself is self-dogfooding of PDCA + Sprint Management** — 4 GitHub issues resolved 4 cases of bkit's own deadlock that bkit discovered, using bkit tooling.
 
 ### Architecture
 
-- **신규 디렉토리**: `lib/application/quality-gates/` (measure-router + failure-reporter)
-- **신규 lib 모듈**: 3 (measure-router.js, measure-gate.usecase.js, failure-reporter.js)
-- **신규 template**: 1 (gate-failure-report.template.md)
-- **수정 lib 모듈**: 4 (advance-phase.usecase.js, quality-gates.js, sprint-handler.js, audit-logger.js)
-- **수정 agent**: 1 (sprint-orchestrator.md — Phase Exit Self-Assessment 신설 + Design Phase Exit Procedure)
-- **수정 skill**: 1 (sprint SKILL.md — §10.1 measure/approve rows + §10.1.1 + §10.1.2)
-- **수정 contract**: 1 (v2113-sprint-contracts.test.js — SC-11/SC-12/SC-13/SC-14 신규 + SC-04/SC-06 evolved)
-- **신규 ACTION_TYPES**: 2 (scope_boundary_approved [#95 F2], gate_measured [#94 F3])
-- **신규 VALID_ACTIONS**: 1 (measure [#94 F3])
-- **신규 bkit 차별화**: #7 "recovery-friendly automation" — sprint deadlock 4종을 사용자 명시 명령으로 해소
+- **New directories**: `lib/application/quality-gates/` (measure-router + failure-reporter)
+- **New lib modules**: 3 (measure-router.js, measure-gate.usecase.js, failure-reporter.js)
+- **New template**: 1 (gate-failure-report.template.md)
+- **Modified lib modules**: 4 (advance-phase.usecase.js, quality-gates.js, sprint-handler.js, audit-logger.js)
+- **Modified agent**: 1 (sprint-orchestrator.md — new Phase Exit Self-Assessment + Design Phase Exit Procedure)
+- **Modified skill**: 1 (sprint SKILL.md — §10.1 measure/approve rows + §10.1.1 + §10.1.2)
+- **Modified contract**: 1 (v2113-sprint-contracts.test.js — SC-11/SC-12/SC-13/SC-14 new + SC-04/SC-06 evolved)
+- **New ACTION_TYPES**: 2 (scope_boundary_approved [#95 F2], gate_measured [#94 F3])
+- **New VALID_ACTIONS**: 1 (measure [#94 F3])
+- **New bkit differentiator**: #7 "recovery-friendly automation" — resolves 4 types of sprint deadlock via user-explicit commands
 
 ### Cross-Sprint References
 
-- bkit v2.1.15 (PR #91, `b65d336`) — Issue #89 .pdca-status.json 6-Layer Defense (본 sprint 진행 중 활성)
-- bkit v2.1.14 차별화 6/6 (memory enforcer + Layer 6 Defense + sequential dispatch + effort-aware + PostToolUse continueOnBlock + heredoc-bypass) — 본 sprint 진행 중 활성 (특히 ENH-310 3회 live-fire)
-- bkit v2.1.13 Sprint Management — 본 sprint가 Sprint Lifecycle 8-phase 활용 + Sprint 2 Application Layer 확장
-- CC v2.1.140 환경 호환성 100 consecutive PASS 유지
+- bkit v2.1.15 (PR #91, `b65d336`) — Issue #89 .pdca-status.json 6-Layer Defense (active during this sprint)
+- bkit v2.1.14 differentiators 6/6 (memory enforcer + Layer 6 Defense + sequential dispatch + effort-aware + PostToolUse continueOnBlock + heredoc-bypass) — active during this sprint (especially ENH-310 3 live-fires)
+- bkit v2.1.13 Sprint Management — this sprint leverages the 8-phase Sprint Lifecycle + extends the Sprint 2 Application Layer
+- CC v2.1.140 environment compatibility maintained at 100 consecutive PASS
 
 ### Release Hardening Sub-Sprint (post-release)
 
-> v2.1.14/15 반복 패턴 종결 — 본 hardening 사이클은 4-feature fix 와 별도로 release metadata + test maintenance + CI gate 강화를 일괄 진행. Plan: `docs/01-plan/features/v2116-release-hardening.plan.md`, Report: `docs/04-report/features/v2116-release-hardening.report.md`.
+> Closure of the v2.1.14/15 recurring pattern — this hardening cycle batches release metadata + test maintenance + CI gate reinforcement separately from the 4-feature fix. Plan: `docs/01-plan/features/v2116-release-hardening.plan.md`, Report: `docs/04-report/features/v2116-release-hardening.report.md`.
 
-**Layer A — Release Metadata 동기 (3 files)**:
-- `README.md` Version badge `Version-2.1.14-green` → `Version-2.1.16-green` (GitHub 첫 인상 정합)
-- `hooks/session-start.js` line 3 주석 `(v2.1.13, ...)` → `(v2.1.16, ...)` (runtime BKIT_VERSION dynamic import 유지)
-- `hooks/startup/session-context.js` line 2 헤더 `(v2.0.0)` → `(v2.1.16)`
+**Layer A — Release Metadata Sync (3 files)**:
+- `README.md` Version badge `Version-2.1.14-green` → `Version-2.1.16-green` (GitHub first-impression consistency)
+- `hooks/session-start.js` line 3 comment `(v2.1.13, ...)` → `(v2.1.16, ...)` (runtime BKIT_VERSION dynamic import retained)
+- `hooks/startup/session-context.js` line 2 header `(v2.0.0)` → `(v2.1.16)`
 
 **Layer B — Test Maintenance (15 files, 31 stale FAIL → 0)**:
-- Orphan test 4 file 삭제 (v2.1.10 Sprint 6에서 lib/context/* 모듈 제거 후 미정리 — `context-loader/impact-analyzer/invariant-checker/scenario-runner` test files)
-- Stale baseline 11 file 갱신:
+- Deleted 4 orphan test files (uncleaned after lib/context/* modules were removed in v2.1.10 Sprint 6 — `context-loader/impact-analyzer/invariant-checker/scenario-runner` test files)
+- Updated 11 stale baseline files:
   - `test/unit/runner.test.js` U-RUN-015/016/069/071 — skills 30→31, workflow 11→12
-  - `test/contract/extended-scenarios.test.js` 5 TC — SoT 동기 (`lib/domain/rules/docs-code-invariants.js` 기준: skills 44, agents 34, mcpTools 19)
-  - `test/contract/invocation-inventory.test.js` 8 TC — counts 동기 + 6 pdca-eval-* (v2.1.10 삭제됨) 제거 + 4 sprint-* (v2.1.13 추가) 추가
-  - `test/contract/docs-code-sync.test.js` 11 TC — counts cascade + tmp fixture (`correct.md`) 갱신
-  - `test/contract/v2112-deep-qa-invariants.contract.test.js` L3-006/002 — lib 모듈 count `142→≥142` (growth-tolerant) + L3-002 runtime-conditional skip
-  - `test/contract/orchestrator.test.js` 2 TC — "회원가입" 라우팅 정책 진화 반영 (`bkend-expert` agent 허용)
-  - `test/contract/status-split.test.js` — status-core exports 17→19 (v2.1.15 #89 `shouldUpdate` + `appendHistoryEntry` 추가)
-  - `test/unit/pdca-status-full.test.js` PS-026 — Issue #89 fix 의도된 동작 반영 (`src/features/auth/login.js` → `'auth'` 추출 금지)
-  - `test/unit/trigger.test.js` U-TRG-016 — JS 부동소수점 (`0.7+0.1 = 0.7999999999999999`) 비교를 epsilon `< 1e-9`로 교정
-  - `test/unit/project-isolation.test.js` ISO-09 — v2.1.10 facade split 반영 (`status.js` → `status-core.js`)
-  - `tests/qa/v2113-sprint-5-quality-docs.test.js` — L3 contract `10/10 PASS` → `14/14 PASS` (v2.1.16 SC-11/12/13/14 추가 반영)
+  - `test/contract/extended-scenarios.test.js` 5 TC — SoT sync (per `lib/domain/rules/docs-code-invariants.js`: skills 44, agents 34, mcpTools 19)
+  - `test/contract/invocation-inventory.test.js` 8 TC — counts sync + removed 6 pdca-eval-* (deleted in v2.1.10) + added 4 sprint-* (added in v2.1.13)
+  - `test/contract/docs-code-sync.test.js` 11 TC — counts cascade + tmp fixture (`correct.md`) update
+  - `test/contract/v2112-deep-qa-invariants.contract.test.js` L3-006/002 — lib module count `142→≥142` (growth-tolerant) + L3-002 runtime-conditional skip
+  - `test/contract/orchestrator.test.js` 2 TC — reflects the evolved "회원가입" routing policy (`bkend-expert` agent allowed)
+  - `test/contract/status-split.test.js` — status-core exports 17→19 (v2.1.15 #89 added `shouldUpdate` + `appendHistoryEntry`)
+  - `test/unit/pdca-status-full.test.js` PS-026 — reflects the intended behavior of the Issue #89 fix (`src/features/auth/login.js` → no `'auth'` extraction)
+  - `test/unit/trigger.test.js` U-TRG-016 — corrected the JS floating-point (`0.7+0.1 = 0.7999999999999999`) comparison to an epsilon `< 1e-9`
+  - `test/unit/project-isolation.test.js` ISO-09 — reflects the v2.1.10 facade split (`status.js` → `status-core.js`)
+  - `tests/qa/v2113-sprint-5-quality-docs.test.js` — L3 contract `10/10 PASS` → `14/14 PASS` (reflects v2.1.16 SC-11/12/13/14 additions)
 
 **Layer C — CI Gate Reinforcement** (`.github/workflows/contract-check.yml`):
-- 신규 step `Release Gate — bkit-full-system (version sync + agent/skill structure)` — 추후 release metadata stale defect 자동 차단
-- 신규 step `Release Gate — docs-code-sync (counts SoT drift detector)` — skills/agents/mcpTools 카운트 drift 자동 검출
+- New step `Release Gate — bkit-full-system (version sync + agent/skill structure)` — automatically blocks future release metadata stale defects
+- New step `Release Gate — docs-code-sync (counts SoT drift detector)` — automatically detects skills/agents/mcpTools count drift
 
 **Verification (post-hardening)**:
 - `node test/contract/scripts/qa-aggregate.js`: PASS 3808 → **3844** (+36), FAIL 31 → **0**, errors 15 → **0**, file count 151 → 147 (-4 orphan)
 - `node tests/qa/bkit-full-system.test.js`: 33 PASS / 3 FAIL → **36 PASS / 0 FAIL**
-- `node tests/contract/v2113-sprint-contracts.test.js`: **14/14 PASS** 유지 (SC-01 ~ SC-14)
-- 모든 11 갱신 file 단독 실행 시 0 FAIL
+- `node tests/contract/v2113-sprint-contracts.test.js`: **14/14 PASS** maintained (SC-01 ~ SC-14)
+- All 11 updated files run standalone with 0 FAIL
 
 **Lessons Learned (carry to v2.1.17)**:
-- L1 "Tests exist but unused" — `bkit-full-system.test.js`가 v2.1.14부터 release defect를 검출했으나 CI 미연결로 무시. 본 cycle Layer C로 해소.
-- L2 Stale baseline은 zero-interest debt 아님 — 누적되면 "FAIL count는 거짓 양성" 패턴이 진짜 결함도 가림.
-- L3 SoT pattern 미준수 — `EXPECTED_COUNTS` SoT가 정확했음에도 테스트가 literal 하드코딩 → cascade drift. Carry CO-1: 테스트가 SoT를 import하도록 리팩토링.
-- L4 사용자 healthy skepticism 가치 — "정말 5개가 다야?" 질문 없이는 31 FAIL stale이 v2.1.17+로 이월됐을 가능성.
+- L1 "Tests exist but unused" — `bkit-full-system.test.js` had detected release defects since v2.1.14 but was ignored due to lacking CI wiring. Resolved by Layer C in this cycle.
+- L2 Stale baselines are not zero-interest debt — once accumulated, the "FAIL count is a false positive" pattern also masks real defects.
+- L3 SoT pattern non-compliance — even though the `EXPECTED_COUNTS` SoT was accurate, the tests hardcoded literals → cascade drift. Carry CO-1: refactor tests to import the SoT.
+- L4 The value of healthy user skepticism — without the question "Is that really all 5?", the 31 stale FAILs might have carried over to v2.1.17+.
 
 ## [2.1.15] - 2026-05-18 (branch: `feature/v2115-issue-89-pdca-status-fix`)
 
-> **Status**: Patch release — Issue [#89](https://github.com/popup-studio-ai/bkit-claude-code/issues/89) 대응 (`.pdca-status.json` 무한 오염 fix).
-> **Reporter**: @doing27 — 실측 사례 294KB, features 147 중 138 garbage, history 1669 중 1661 garbage.
+> **Status**: Patch release — response to Issue [#89](https://github.com/popup-studio-ai/bkit-claude-code/issues/89) (`.pdca-status.json` infinite contamination fix).
+> **Reporter**: @doing27 — measured case 294KB, 138 of 147 features garbage, 1661 of 1669 history garbage.
 
-### Fixed — Issue #89: `.pdca-status.json` 무한 오염 (6-Layer Defense)
+### Fixed — Issue #89: `.pdca-status.json` infinite contamination (6-Layer Defense)
 
-매 source 파일 편집마다 `.pdca-status.json`에 garbage feature 누적되던 문제를 6-Layer 방어로 종결.
+Closed the problem where garbage features accumulated in `.pdca-status.json` on every source file edit, via a 6-Layer defense.
 
-- **L1 `extractFeature` 강화** (`lib/core/file.js`):
-  - 패턴 매칭 시 캡처값이 파일(확장자 보유)이면 skip (`app/services/foo.py` → `'foo.py'` 오추출 차단)
-  - `GENERIC_NAMES` 19 → **65 디렉토리 확장** — 일반 백엔드/프론트 레이아웃 (`api`/`web`/`mobile`/`client`/`server`/`backend`/`frontend`/`admin`/`auth`/`cms`/`database`/`config`/`core`/`helpers`/`middleware`/`plugins`/`scripts`/`styles`/`static`/`public`/`assets`/`tests`/`tenants`/`versions`/`tmp`/`audit`/`dashboard`) + 버전 디렉토리 (`v1`~`v9`) + Next.js 라우트 그룹 (`(dashboard)`/`(auth)`/`(public)`/`(admin)`/`(api)`)
-  - Fallback (부모 디렉토리 거슬러 올라가기)을 **explicit opt-in (default OFF)** — 기존 호출자는 모두 새 default 받음
-  - 함수 시그니처: `extractFeature(filePath, opts = {})` (backward-compat)
+- **L1 `extractFeature` reinforcement** (`lib/core/file.js`):
+  - On pattern match, skip if the captured value is a file (has an extension) (`app/services/foo.py` → blocks the `'foo.py'` mis-extraction)
+  - `GENERIC_NAMES` 19 → **expanded to 65 directories** — common backend/frontend layouts (`api`/`web`/`mobile`/`client`/`server`/`backend`/`frontend`/`admin`/`auth`/`cms`/`database`/`config`/`core`/`helpers`/`middleware`/`plugins`/`scripts`/`styles`/`static`/`public`/`assets`/`tests`/`tenants`/`versions`/`tmp`/`audit`/`dashboard`) + version directories (`v1`~`v9`) + Next.js route groups (`(dashboard)`/`(auth)`/`(public)`/`(admin)`/`(api)`)
+  - Made the fallback (walking up to the parent directory) **explicit opt-in (default OFF)** — all existing callers receive the new default
+  - Function signature: `extractFeature(filePath, opts = {})` (backward-compat)
 - **L2 `extractFeatureFromContext` DRY** (`lib/pdca/status-core.js`):
-  - 중복 패턴 매칭 코드 제거, `extractFeature`로 위임 — 동일 fix 공유
-- **L3 `updatePdcaStatus` 검증 게이트** (`lib/pdca/status-core.js`):
-  - `opts.requireDocs` (default true): `docs/01-plan/features/${feature}.plan.md` 또는 `docs/02-design/features/${feature}.design.md` 부재 시 silent no-op
-  - 16개 기존 호출자 모두 default behavior 통과 (PDCA workflow는 plan 문서 작성 후 진입)
-  - `shouldUpdate` 헬퍼로 추출 (testability)
-- **L4 `scripts/pre-write.js` schema 정정**:
-  - `currentStatus?.currentFeature` → `currentStatus?.primaryFeature` 정정 (v2/v3 schema에는 `currentFeature` 필드 부재 — `status-migration.js:31,74`에서 normalize됨)
-  - v2.1.7 "Issue #79 P4" fix가 실제로는 모든 케이스에서 false-negative였던 잠재 버그 해결
+  - Removed the duplicate pattern-matching code, delegating to `extractFeature` — sharing the same fix
+- **L3 `updatePdcaStatus` validation gate** (`lib/pdca/status-core.js`):
+  - `opts.requireDocs` (default true): silent no-op when `docs/01-plan/features/${feature}.plan.md` or `docs/02-design/features/${feature}.design.md` is absent
+  - All 16 existing callers pass the default behavior (the PDCA workflow enters after writing the plan document)
+  - Extracted into a `shouldUpdate` helper (testability)
+- **L4 `scripts/pre-write.js` schema correction**:
+  - Corrected `currentStatus?.currentFeature` → `currentStatus?.primaryFeature` (the v2/v3 schema has no `currentFeature` field — it is normalized at `status-migration.js:31,74`)
+  - Resolved a latent bug where the v2.1.7 "Issue #79 P4" fix was actually a false-negative in all cases
 - **L5 `history` dedup + ring buffer** (`lib/pdca/status-core.js`):
-  - `appendHistoryEntry` 헬퍼로 분리. consecutive 동일 `feature/phase/action` entry는 timestamp만 갱신 (push 안 함)
-  - Ring buffer limit 100 적용 — 100회 동일 편집 시 history는 항상 1개
-- **L6 단위 테스트 48 TC** (회귀 방지):
+  - Separated into an `appendHistoryEntry` helper. Consecutive identical `feature/phase/action` entries only update the timestamp (no push)
+  - Applied a ring buffer limit of 100 — after 100 identical edits, history always has exactly 1 entry
+- **L6 unit tests, 48 TC** (regression prevention):
   - `tests/unit/file-extract-feature.test.js` (20 TC)
   - `tests/unit/extract-feature-from-context.test.js` (10 TC)
-  - `tests/unit/pdca-status-gating.test.js` (18 TC, L3+L5 헬퍼 검증)
+  - `tests/unit/pdca-status-gating.test.js` (18 TC, L3+L5 helper verification)
 
 ### Changed
 
 - `extractFeature(filePath)` → `extractFeature(filePath, opts = {})` — `opts.allowFallback: false` default (backward-compat)
-- `updatePdcaStatus(feature, phase, data)` → `updatePdcaStatus(feature, phase, data, opts = {})` — `opts.requireDocs: true` default + `opts.docCheckFn` 테스트 주입 가능
-- `lib/pdca/status-core.js` exports: `shouldUpdate` + `appendHistoryEntry` 헬퍼 추가
-- `lib/core/file.js` exports: `GENERIC_NAMES` 추가
+- `updatePdcaStatus(feature, phase, data)` → `updatePdcaStatus(feature, phase, data, opts = {})` — `opts.requireDocs: true` default + `opts.docCheckFn` test-injectable
+- `lib/pdca/status-core.js` exports: added `shouldUpdate` + `appendHistoryEntry` helpers
+- `lib/core/file.js` exports: added `GENERIC_NAMES`
 
 ### Compatibility
 
-- **Breaking changes**: 0건 (모든 기존 호출자는 default behavior로 안전)
-- **Migration**: 불요 — 기존 `.pdca-status.json` garbage는 사용자가 별도 cleanup 가능 (본 PR 외)
-- **v3 schema**: 변경 없음
-- **bkit Trust Level**: 영향 없음
-- **Sprint Management (v2.1.13)**: 영향 없음
+- **Breaking changes**: 0 (all existing callers are safe with the default behavior)
+- **Migration**: not required — existing `.pdca-status.json` garbage can be cleaned up separately by the user (outside this PR)
+- **v3 schema**: unchanged
+- **bkit Trust Level**: no impact
+- **Sprint Management (v2.1.13)**: no impact
 
 ### Documentation
 
-- `docs/01-plan/features/issue-89-pdca-status-fix.plan.md` (한국어)
-- `docs/02-design/features/issue-89-pdca-status-fix.design.md` (한국어, 6-Layer Defense 설계)
-- `docs/04-report/features/issue-89-pdca-status-fix.report.md` (한국어, Phase 4 산출물)
+- `docs/01-plan/features/issue-89-pdca-status-fix.plan.md` (Korean)
+- `docs/02-design/features/issue-89-pdca-status-fix.design.md` (Korean, 6-Layer Defense design)
+- `docs/04-report/features/issue-89-pdca-status-fix.report.md` (Korean, Phase 4 deliverable)
 
-### 검증
+### Verification
 
 - `node --test tests/unit/file-extract-feature.test.js` → 20/20 PASS
 - `node --test tests/unit/extract-feature-from-context.test.js` → 10/10 PASS
 - `node --test tests/unit/pdca-status-gating.test.js` → 18/18 PASS
-- 누적 **48/48 PASS**
+- Cumulative **48/48 PASS**
 
 ---
 
@@ -762,7 +1613,7 @@ orthogonal to) the per-feature PDCA 9-phase cycle.
 - **5 sprint infrastructure adapters** beyond state-store/telemetry: `gap-detector.adapter.js` + `auto-fixer.adapter.js` + `data-flow-validator.adapter.js` (no-op baseline + agentTaskRunner-injected real impl path) + `matrix-sync.adapter.js` + `sprint-doc-scanner.adapter.js`
 - **1 new L3 contract test**: `tests/contract/v2113-sprint-contracts.test.js` (366 LOC, 8 cross-sprint contracts SC-01 ~ SC-08): entity shape · deps interface · infra adapters · handler signature · 4-layer chain · ACTION_TYPES 20 · SPRINT_AUTORUN_SCOPE mirror · hooks 21:24 invariant
 - **2 Korean user guides**: `docs/06-guide/sprint-management.guide.md` (~330 lines, 8 sections) + `sprint-migration.guide.md` (~200 lines, PDCA ↔ Sprint orthogonal coexistence)
-- **2 new ADRs**: `docs/adr/0006-cc-upgrade-policy.md` (CC version compatibility policy, 79+ consecutive baseline) + `docs/adr/0007-sprint-as-meta-container.md` (Sprint = PDCA 위 메타 컨테이너, backward-compat invariant)
+- **2 new ADRs**: `docs/adr/0006-cc-upgrade-policy.md` (CC version compatibility policy, 79+ consecutive baseline) + `docs/adr/0007-sprint-as-meta-container.md` (Sprint = meta-container above PDCA, backward-compat invariant)
 - **Context Sizer** (S3-UX) — Kahn topological sort + greedy bin-packing for sprint feature size estimation (`lib/application/sprint-lifecycle/context-sizer.js`, max 100K tokens/sprint, 25% safety margin, dependency-aware)
 - **Sprint Master Plan Generator** (S2-UX) — `sprint-master-planner` agent that produces Context-Anchor-driven sprint planning documents from the 7 Sprint 4 templates
 
@@ -1046,7 +1897,7 @@ v2.1.13 carries (CARRY-7~12 in MEMORY.md).
 
 ### 🎯 Sprint α — Onboarding Revolution
 
-첫 5분 경험 재설계: One-Liner Single Source of Truth(5곳 동기화), Agent Teams env 자동 검출, CC 버전 체크, First-Run 튜토리얼(Pencil Design Anchor pilot).
+Redesign of the first-5-minutes experience: One-Liner Single Source of Truth (synced across 5 locations), Agent Teams env auto-detection, CC version check, First-Run tutorial (Pencil Design Anchor pilot).
 
 - **FR-α1+α2-c/d**: `README.md` 100-line restructure + `README-FULL.md` separation. One-Liner header on both (`681e8ed`).
 - **FR-α2-a/b**: `lib/infra/branding.js` (`ONE_LINER_EN` / `ONE_LINER_KO`); `.claude-plugin/plugin.json:description` synced (`d348f24`).
@@ -1058,11 +1909,11 @@ v2.1.13 carries (CARRY-7~12 in MEMORY.md).
 
 ### 🔍 Sprint β — Discoverability
 
-설치된 39 skills + 36 agents + evals 시스템을 사용자가 발견·활용 가능하도록 하는 6 FR.
+6 FRs that make the installed 39 skills + 36 agents + evals system discoverable and usable by users.
 
 - **FR-β1**: `/bkit-explore` — `lib/discovery/explorer.js` + `skills/bkit-explore/SKILL.md`. 5-category tree + Level filter + listEvals (`aef5e36`).
-- **FR-β2**: `/bkit-evals` — `lib/evals/runner-wrapper.js` 안전 wrapper (skill regex, argv-form spawn, 30s timeout, `.bkit/runtime/evals-{skill}-{ts}.json`) + `skills/bkit-evals/SKILL.md` (`81b9048`).
-- **FR-β3**: 친화 에러 메시지 — `lib/i18n/translator.js` + `assets/error-dict.{en,ko}.json` (RD-5 narrowed scope: 9 cat × 1 default style × KO+EN full + 6 lang fallback) (`237e071`).
+- **FR-β2**: `/bkit-evals` — `lib/evals/runner-wrapper.js` safe wrapper (skill regex, argv-form spawn, 30s timeout, `.bkit/runtime/evals-{skill}-{ts}.json`) + `skills/bkit-evals/SKILL.md` (`81b9048`).
+- **FR-β3**: Friendly error messages — `lib/i18n/translator.js` + `assets/error-dict.{en,ko}.json` (RD-5 narrowed scope: 9 cat × 1 default style × KO+EN full + 6 lang fallback) (`237e071`).
 - **FR-β4**: `/pdca-watch` — `lib/dashboard/watch.js` (read-only state tap, 30s `/loop` v2.1.71+, fallback E-β4-01) + `skills/pdca-watch/SKILL.md` (`58906e0`).
 - **FR-β5**: `/pdca-fast-track` — `lib/control/fast-track.js` (3 preconditions, `.bkit/runtime/fast-track-log.json` audit trail) + `skills/pdca-fast-track/SKILL.md` (`0fb0e1e`). Config block added to `bkit.config.json#control.fastTrack` (`e2851aa`).
 - **FR-β6**: 8-language auto-detect — `lib/i18n/detector.js` (`detectFromPrompt`, `mergeWithEnv`) (`7058a41`).
@@ -1070,16 +1921,16 @@ v2.1.13 carries (CARRY-7~12 in MEMORY.md).
 
 ### 🔒 Sprint γ — Trust Foundation
 
-v2.1.10 잔존 R1/R2 risk 완전 종결 + L5 E2E 확장.
+Complete closure of the residual R1/R2 risks from v2.1.10 + L5 E2E expansion.
 
 - **FR-γ1**: Trust Score `reconcile()` public API + dead-code invariant. `scripts/check-trust-score-reconcile.js` 4-check CI gate (`e6bfe4c`).
-- **FR-γ2**: Application Layer pilot — `lib/application/pdca-lifecycle/{index,phases,transitions}.js` (PHASES enum + 19 legal transitions) + ADR 0005 (`docs/adr/0005-application-layer-pilot.md`). `lib/pdca/lifecycle.js` 변경 없음 (v2.1.12 shim 전환 carryover).
+- **FR-γ2**: Application Layer pilot — `lib/application/pdca-lifecycle/{index,phases,transitions}.js` (PHASES enum + 19 legal transitions) + ADR 0005 (`docs/adr/0005-application-layer-pilot.md`). `lib/pdca/lifecycle.js` unchanged (v2.1.12 shim conversion carryover).
 - **FR-γ3**: L5 E2E 9-scenario — `test/e2e/pdca-full-cycle-9scenario.test.js` (Agent Teams skip-policy: scenarios 1+7 skip-if-no-env) (`c557e2e`).
-- **FR-γ4**: Agent-Hook multi-event grep 조사 → ADR 0004 (`docs/adr/0004-agent-hook-multi-event-deferral.md`) — 0 agent-type matchers, defer to v2.1.12 ENH-280 (`4597e92`).
+- **FR-γ4**: Agent-Hook multi-event grep investigation → ADR 0004 (`docs/adr/0004-agent-hook-multi-event-deferral.md`) — 0 agent-type matchers, defer to v2.1.12 ENH-280 (`4597e92`).
 
 ### ⚙️ Sprint δ — Port Extension & Governance
 
-v2.2.x 확장 기반.
+Foundation for v2.2.x expansion.
 
 - **FR-δ1**: MCP Port abstraction — `lib/domain/ports/mcp-tool.port.js` (type-only, ENH-277 `CALL_PATHS=['skill','slash','hook']`) + `lib/infra/mcp-port-registry.js` (16 tools = 10 pdca + 6 analysis frozen) + 21 contract TC (`7af7d5b`).
 - **FR-δ2**: M1-M10 Quality Gates catalog — `docs/reference/quality-gates-m1-m10.md` + `scripts/check-quality-gates-m1-m10.js` 3-way SSoT invariant (catalog ↔ `bkit.config.json` ↔ runtime) (`84fd118`).
@@ -1123,86 +1974,86 @@ v2.2.x 확장 기반.
 
 ## [2.1.10] - 2026-04-22 (branch: `feat/v2110-integrated-enhancement`, pre-main-merge)
 
-> **Release discipline**: 본 섹션은 `git tag v2.1.10` + main 머지 직전의 스냅샷입니다. 48h 관찰 후 최종 릴리스 시 섹션 재정리 예정.
+> **Release discipline**: This section is a snapshot taken just before `git tag v2.1.10` + main merge. After a 48h observation period, the section will be reorganized at final release.
 
 ### 🎯 Sprint 0 ~ Sprint 6 — Integrated Enhancement (Clean Architecture + Defense-in-Depth + Invocation Contract)
 
-CC v2.1.117 기준 호환성 유지 + 6 Sprint(0/1/2/3/4/4.5 + 5a/5b/5.5/6) 누적 구현. Plan-Plus §20에 따른 전범위 편입 버전.
+Maintains compatibility against the CC v2.1.117 baseline + cumulative implementation across 6 Sprints (0/1/2/3/4/4.5 + 5a/5b/5.5/6). The version that incorporates the full scope per Plan-Plus §20.
 
 ### Added
 
-- **Clean Architecture 4-Layer**: `lib/domain/{ports,guards,rules}` 11 modules (Domain 의존성 0), `lib/infra/{telemetry,docs-code-scanner,cc-bridge,mcp-test-harness}` (Adapters), `lib/cc-regression/` (Application) 6 modules = 568 LOC.
-- **Domain Ports 6종**: `cc-payload`, `state-store`, `regression-registry`, `audit-sink`, `token-meter`, `docs-code-index` — JSDoc typedef 기반 Type-only 계약.
-- **Domain Guards 4종** (CC v2.1.117 회귀 방어): `enh-254-fork-precondition` (#51165), `enh-262-hooks-combo` (#51798), `enh-263-claude-write` (#51801), `enh-264-token-threshold` (#51809).
-- **Guard Registry**: `lib/cc-regression/registry.js` — 21 Guards 등록 (MON-CC-02, MON-CC-06 17건, ENH-262/263/264, ENH-214). `expectedFix` seed 4건으로 `lifecycle.reconcile()` 자동 해제 활성화.
-- **Invocation Contract Test L1~L4** (619 assertions 중 L1+L4 226 assertions CI gate): `test/contract/baseline/v2.1.9/` 94 JSON baseline (39 skills + 36 agents + 16 MCP tools + hook events 24 blocks + slash commands + 3 MCP resources).
+- **Clean Architecture 4-Layer**: `lib/domain/{ports,guards,rules}` 11 modules (0 Domain dependencies), `lib/infra/{telemetry,docs-code-scanner,cc-bridge,mcp-test-harness}` (Adapters), `lib/cc-regression/` (Application) 6 modules = 568 LOC.
+- **6 Domain Ports**: `cc-payload`, `state-store`, `regression-registry`, `audit-sink`, `token-meter`, `docs-code-index` — Type-only contracts based on JSDoc typedef.
+- **4 Domain Guards** (CC v2.1.117 regression defense): `enh-254-fork-precondition` (#51165), `enh-262-hooks-combo` (#51798), `enh-263-claude-write` (#51801), `enh-264-token-threshold` (#51809).
+- **Guard Registry**: `lib/cc-regression/registry.js` — 21 Guards registered (MON-CC-02, MON-CC-06 17 cases, ENH-262/263/264, ENH-214). Activated `lifecycle.reconcile()` auto-release with 4 `expectedFix` seeds.
+- **Invocation Contract Test L1~L4** (of 619 assertions, L1+L4 226 assertions are the CI gate): `test/contract/baseline/v2.1.9/` 94 JSON baseline (39 skills + 36 agents + 16 MCP tools + hook events 24 blocks + slash commands + 3 MCP resources).
 - **Contract L2 Smoke** (`l2-smoke.test.js` 98 TC) + **L3 MCP Compatibility** (`l3-mcp-compat.test.js` 83 TC).
-- **Docs=Code CI** (ENH-241): `lib/infra/docs-code-scanner.js` + `scripts/docs-code-sync.js` — skills/agents/hookEvents/hookBlocks/mcpServers/mcpTools/libModules/scripts 8개 수치 0-drift 자동 검증.
-- **CI Workflows 2종**: `.github/workflows/contract-check.yml` (lint + contract + docs-code-sync + check-guards + check-deadcode), `cc-regression-reconcile.yml` (daily cron).
-- **Validator CLIs 3종**: `scripts/check-guards.js` (21 guards), `scripts/docs-code-sync.js` (0 drift), `scripts/check-deadcode.js` (Live/Exempt/Legacy 분류).
-- **Integration Runtime Test** (`test/contract/integration-runtime.test.js` 23 TC): Sprint 4.5 재귀 버그 영구 방어선.
-- **Legacy QA Integration** (v2.1.10 Sprint 5a): `qa-aggregate.js` `tests/qa/` 통합 집계 + `EXPECTED_FAILURES` 분리 카운터.
-- **Test Case 총합**: **3,649 TC** (PASS 3,647 / FAIL 0 / Expected 2) — 111 test files 집계 기준. v2.1.9 대비 +581 TC.
+- **Docs=Code CI** (ENH-241): `lib/infra/docs-code-scanner.js` + `scripts/docs-code-sync.js` — automatic 0-drift verification of 8 counts: skills/agents/hookEvents/hookBlocks/mcpServers/mcpTools/libModules/scripts.
+- **2 CI Workflows**: `.github/workflows/contract-check.yml` (lint + contract + docs-code-sync + check-guards + check-deadcode), `cc-regression-reconcile.yml` (daily cron).
+- **3 Validator CLIs**: `scripts/check-guards.js` (21 guards), `scripts/docs-code-sync.js` (0 drift), `scripts/check-deadcode.js` (Live/Exempt/Legacy classification).
+- **Integration Runtime Test** (`test/contract/integration-runtime.test.js` 23 TC): Sprint 4.5 recursion bug permanent defense line.
+- **Legacy QA Integration** (v2.1.10 Sprint 5a): `qa-aggregate.js` `tests/qa/` integrated aggregation + `EXPECTED_FAILURES` separate counter.
+- **Total Test Cases**: **3,649 TC** (PASS 3,647 / FAIL 0 / Expected 2) — aggregated across 111 test files. +581 TC vs v2.1.9.
 
 ### Changed
 
-- **lib/pdca/status.js** 872 LOC → facade 52 + `status-core.js`(399) + `status-migration.js`(156) + `status-cleanup.js`(255) 분할.
-- **scripts/pre-write.js** 286 → 529 LOC 12-stage 파이프라인화 (defense-coordinator 통합).
-- **plugin.json `description`** 재서술: 39 Skills / 36 Agents / 24 Hook Blocks / 16 MCP Tools 명시.
-- **MEMORY.md Architecture** 수치 v2.1.10 기준 재정렬: 101 → **128 Lib Modules** (Sprint 7 final, adds `lib/orchestrator/` 5 + `lib/domain/` 11 + `lib/infra/` 3 + `lib/cc-regression/` 8 + 3 top-level), 24,616 → **~27,085 LOC**, 43 → **47 Scripts**, lib subdirs 11 → **15** (audit, cc-regression, context, control, core, domain, infra, intent, orchestrator, pdca, qa, quality, task, team, ui).
-- **BKIT_VERSION 중앙화 완결** (ENH-167): `hooks/session-start.js`, `hooks/hooks.json`, `scripts/unified-bash-pre.js`, `lib/core/io.js` 모두 `lib/core/version.js` 참조. `bkit.config.json:version`이 단일 진실원.
-- **`createDualSink` audit-logger 사용 금지**: Sprint 4.5 재귀 학습 — `lib/audit/audit-logger.js:219` `createOtelSink()` 단독 호출로 변경. `lib/infra/telemetry.js:56-73` DANGER ZONE 14줄 경고 주석 추가.
+- **lib/pdca/status.js** 872 LOC → split into facade 52 + `status-core.js`(399) + `status-migration.js`(156) + `status-cleanup.js`(255).
+- **scripts/pre-write.js** 286 → 529 LOC, turned into a 12-stage pipeline (defense-coordinator integration).
+- **plugin.json `description`** re-described: explicitly states 39 Skills / 36 Agents / 24 Hook Blocks / 16 MCP Tools.
+- **MEMORY.md Architecture** counts realigned to the v2.1.10 baseline: 101 → **128 Lib Modules** (Sprint 7 final, adds `lib/orchestrator/` 5 + `lib/domain/` 11 + `lib/infra/` 3 + `lib/cc-regression/` 8 + 3 top-level), 24,616 → **~27,085 LOC**, 43 → **47 Scripts**, lib subdirs 11 → **15** (audit, cc-regression, context, control, core, domain, infra, intent, orchestrator, pdca, qa, quality, task, team, ui).
+- **BKIT_VERSION centralization complete** (ENH-167): `hooks/session-start.js`, `hooks/hooks.json`, `scripts/unified-bash-pre.js`, `lib/core/io.js` all reference `lib/core/version.js`. `bkit.config.json:version` is the single source of truth.
+- **`createDualSink` audit-logger usage prohibited**: Sprint 4.5 recursion lesson — changed to a standalone `createOtelSink()` call at `lib/audit/audit-logger.js:219`. Added a 14-line DANGER ZONE warning comment at `lib/infra/telemetry.js:56-73`.
 
 ### Fixed
 
-- **C1 (Critical)**: `lib/audit/audit-logger.js:332-344` `startDate` → `date` 파라미터 (설계 명세와 동기화).
-- **C2 (Critical)**: audit details PII 유출 방지 — `sanitizeDetails` 6-key 블랙리스트 + 500자 cap.
-- **Sprint 4.5 자기 도입 버그**: `createDualSink(createFileSink, createOtelSink)` + `createFileSink`가 `audit-logger.writeAuditLog()` 재호출 → 682 GB recursion. `createOtelSink()` 단독 호출로 교체 + integration-runtime TC 영구 방어.
+- **C1 (Critical)**: `lib/audit/audit-logger.js:332-344` `startDate` → `date` parameter (synced with the design spec).
+- **C2 (Critical)**: audit details PII leak prevention — `sanitizeDetails` 6-key blacklist + 500-char cap.
+- **Sprint 4.5 self-introduced bug**: `createDualSink(createFileSink, createOtelSink)` + `createFileSink` re-calling `audit-logger.writeAuditLog()` → 682 GB recursion. Replaced with a standalone `createOtelSink()` call + integration-runtime TC permanent defense.
 
 ### Security
 
-- **Defense-in-Depth 4-Layer** 공식화: Layer 1 (CC Built-in) → Layer 2 (bkit PreToolUse Hook: `pre-write.js` + `unified-bash-pre.js` + defense-coordinator) → Layer 3 (`audit-logger` OWASP A03/A08 sanitizer) → Layer 4 (Token Ledger `.bkit/runtime/token-ledger.json` NDJSON).
-- **PII Redaction 7-key**: `text`, `content`, `prompt`, `message`, `api_key`, `token`, `password` 블랙리스트.
-- **ENH-263 `.claude/` write + bypassPermissions 조합 차단** (#51801).
-- **ENH-262 dangerouslyDisableSandbox + allow 조합 차단** (#51798).
+- **Defense-in-Depth 4-Layer** formalized: Layer 1 (CC Built-in) → Layer 2 (bkit PreToolUse Hook: `pre-write.js` + `unified-bash-pre.js` + defense-coordinator) → Layer 3 (`audit-logger` OWASP A03/A08 sanitizer) → Layer 4 (Token Ledger `.bkit/runtime/token-ledger.json` NDJSON).
+- **PII Redaction 7-key**: `text`, `content`, `prompt`, `message`, `api_key`, `token`, `password` blacklist.
+- **ENH-263 blocks the `.claude/` write + bypassPermissions combination** (#51801).
+- **ENH-262 blocks the dangerouslyDisableSandbox + allow combination** (#51798).
 
 ### Compatibility
 
-- **Invocation Contract 100% 보존** (226 assertions PASS 유지).
-- **Starter / Dynamic / Enterprise 세그먼트 zero-action update**.
-- **CC CLI 호환**: v2.1.78+ 필수, **v2.1.117+ 권장** (75 consecutive compatible releases).
-- **Deprecation**: 없음 (첫 정책 도입 마이너).
+- **Invocation Contract 100% preserved** (226 assertions PASS maintained).
+- **Starter / Dynamic / Enterprise segments zero-action update**.
+- **CC CLI compatibility**: v2.1.78+ required, **v2.1.117+ recommended** (75 consecutive compatible releases).
+- **Deprecation**: none (first minor to introduce the policy).
 
-### Architecture Snapshot (v2.1.10 Final — Sprint 7 워크플로우 유기성 완결)
+### Architecture Snapshot (v2.1.10 Final — Sprint 7 workflow organicity complete)
 
 **39 Skills · 36 Agents · 21 Hook Events (24 blocks) · 16 MCP Tools · 2 MCP Servers · 128 Lib Modules (~27,085 LOC across 15 subdirs) · 47 Scripts · 113 Test Files · 3,762 TC** (PASS 3,760 / 0 FAIL / 2 expected legacy). Canonical measured 2026-04-22 via `scripts/docs-code-sync.js` + `find lib -name "*.js"`.
 
-### Sprint 7 — Workflow Orchestration Integrity (신규, 사용자 재정의 대응)
+### Sprint 7 — Workflow Orchestration Integrity (new, response to user redefinition)
 
-Phase A 4 + Phase A+ 1 = **5개 병렬 실측 에이전트** 기반 Gap Taxonomy 72건(7축) 도출 후 P0 10 + P1 12 + P2/3 50건 처리.
+Phase A 4 + Phase A+ 1 = **5 parallel measurement agents** that derived a 72-item Gap Taxonomy (7 axes), after which P0 10 + P1 12 + P2/3 50 items were processed.
 
 **New: lib/orchestrator/ (3-Layer Orchestration)**
 - `intent-router.js` — priority-resolved intent detection (feature > skill > agent)
-- `next-action-engine.js` — Stop-family hook 전체 Next Action 표준화
-- `team-protocol.js` — PM/CTO/QA Lead의 실 Task spawn 경로 프로토콜 (state-writer lifecycle + cc-regression attribution)
-- `workflow-state-machine.js` — PDCA phase × Control Level 통합 + matchRate SSoT + ARCHIVE dispatcher + DO_COMPLETE setter
-- `index.js` — 단일 facade (19 exports)
+- `next-action-engine.js` — Next Action standardization across the entire Stop-family hook
+- `team-protocol.js` — protocol for the PM/CTO/QA Lead's real Task spawn path (state-writer lifecycle + cc-regression attribution)
+- `workflow-state-machine.js` — PDCA phase × Control Level integration + matchRate SSoT + ARCHIVE dispatcher + DO_COMPLETE setter
+- `index.js` — single facade (19 exports)
 
-**Changed (Invocation Contract 100% 보존)**:
-- `lib/intent/language.js:SKILL_TRIGGER_PATTERNS` — 4 skills → **15 skills** (pdca, pm-discovery, plan-plus, qa-phase, code-review, deploy, rollback, skill-create, control, audit, phase-4-api 신규 11개)
+**Changed (Invocation Contract 100% preserved)**:
+- `lib/intent/language.js:SKILL_TRIGGER_PATTERNS` — 4 skills → **15 skills** (11 new: pdca, pm-discovery, plan-plus, qa-phase, code-review, deploy, rollback, skill-create, control, audit, phase-4-api)
 - `lib/pdca/state-machine.js:288` + `lib/pdca/automation.js:82` — matchRate threshold default **100→90** (bkit.config.json:pdca.matchRateThreshold SSoT)
-- `lib/control/trust-engine.js:syncToControlState` — **Trust Score currentLevel auto-reflect 복원** (autoEscalation/autoDowngrade 플래그 실 연결, G-C-01/02)
-- `agents/cto-lead.md` — body에 Phase별 Task spawn 예시 5개 블록 추가 + frontmatter `Task(pm-lead)`, `Task(qa-lead)`, `Task(pdca-iterator)` 추가 (G-T-01/02)
-- `skills/pdca/SKILL.md:384` — Enterprise teammates **5→6** (strategy.js와 동기, G-T-03)
-- `scripts/unified-stop.js`, `session-end-handler.js`, `subagent-stop-handler.js` — Next Action Engine 연결 (G-J-05/06/07)
-- `scripts/user-prompt-handler.js` — structured `suggestions` 필드 병행 emit (G-J-09)
-- 79건 `@version 2.0.0 → 2.1.10` + `@version 1.6.x → 2.1.10` 일괄 갱신 (lib 66 + scripts 13)
-- `skills/phase-4-api/SKILL.md` + `phase-5-design-system/SKILL.md` — 중복 `user-invocable` 필드 정리
-- `skills/zero-script-qa/SKILL.md` — `allowed-tools` 명시
+- `lib/control/trust-engine.js:syncToControlState` — **restored Trust Score currentLevel auto-reflect** (autoEscalation/autoDowngrade flags actually wired, G-C-01/02)
+- `agents/cto-lead.md` — added 5 per-Phase Task spawn example blocks to the body + added frontmatter `Task(pm-lead)`, `Task(qa-lead)`, `Task(pdca-iterator)` (G-T-01/02)
+- `skills/pdca/SKILL.md:384` — Enterprise teammates **5→6** (synced with strategy.js, G-T-03)
+- `scripts/unified-stop.js`, `session-end-handler.js`, `subagent-stop-handler.js` — wired to Next Action Engine (G-J-05/06/07)
+- `scripts/user-prompt-handler.js` — emits a structured `suggestions` field in parallel (G-J-09)
+- 79 `@version 2.0.0 → 2.1.10` + `@version 1.6.x → 2.1.10` batch updates (lib 66 + scripts 13)
+- `skills/phase-4-api/SKILL.md` + `phase-5-design-system/SKILL.md` — cleaned up duplicate `user-invocable` fields
+- `skills/zero-script-qa/SKILL.md` — `allowed-tools` made explicit
 
-**Test (Sprint 7 신규)**:
+**Test (Sprint 7 new)**:
 - `test/contract/orchestrator.test.js` — 21 L1/L2 TC (IntentRouter + NextActionEngine + TeamProtocol + WorkflowStateMachine)
-- SKILL_TRIGGER coverage L1 test 확장
+- SKILL_TRIGGER coverage L1 test expansion
 
 **Quality Gates (8/8 PASS)**:
 - check-guards (21 guards)
@@ -1216,22 +2067,22 @@ Phase A 4 + Phase A+ 1 = **5개 병렬 실측 에이전트** 기반 Gap Taxonomy
 
 ### Success Criteria D19~D30
 
-| # | 기준 | 결과 |
+| # | Criterion | Result |
 |---|------|:---:|
 | D19 | Skill trigger coverage ≥ 15 | ✅ 15 |
-| D20 | Feature intent 주입률 ≥ 8/10 | ✅ IntentRouter loose threshold 0.7 |
-| D21 | Agent-Skill resolver 구현 | ✅ |
+| D20 | Feature intent injection rate ≥ 8/10 | ✅ IntentRouter loose threshold 0.7 |
+| D21 | Agent-Skill resolver implemented | ✅ |
 | D22 | matchRate threshold SSoT 90 only | ✅ |
-| D23 | cto-lead body Task 예시 ≥ 5 | ✅ (Plan/Design/Do/Check/Act 5 블록) |
-| D24 | CTO teammates Task 선언 | ✅ pm-lead + qa-lead + pdca-iterator |
+| D23 | cto-lead body Task examples ≥ 5 | ✅ (Plan/Design/Do/Check/Act 5 blocks) |
+| D24 | CTO teammates Task declaration | ✅ pm-lead + qa-lead + pdca-iterator |
 | D25 | Enterprise teammates 6 = 6 | ✅ |
-| D26 | Next Action 제안 범위 ≥ 15 hook | ✅ (Stop + SessionEnd + SubagentStop + PDCA 13 경로) |
-| D27 | L4 자동 체인 smoke ≤ 2 manual | ⏳ Phase 7 /pdca qa로 실측 |
-| D28 | Trust Score level 반영 | ✅ |
-| D29 | Agents "Use proactively" ≥ 30 | ⏳ (Sprint 7e 부분 진행, 18→28+ 확장은 릴리스 전 지속) |
-| D30 | Legacy `@version 2.0.0` = 0 | ✅ (lib 66 + scripts 13 = 79건 전량 2.1.10) |
+| D26 | Next Action suggestion scope ≥ 15 hooks | ✅ (Stop + SessionEnd + SubagentStop + PDCA 13 paths) |
+| D27 | L4 auto-chain smoke ≤ 2 manual | ⏳ measured via Phase 7 /pdca qa |
+| D28 | Trust Score level reflection | ✅ |
+| D29 | Agents "Use proactively" ≥ 30 | ⏳ (Sprint 7e partially done, 18→28+ expansion continues until release) |
+| D30 | Legacy `@version 2.0.0` = 0 | ✅ (lib 66 + scripts 13 = 79 all at 2.1.10) |
 
-**25/30 충족** (D27 L4 자동 체인 + D29 proactive 문구 일부 + D1 tag + D3 CI PR + D8 48h 관측 = 5건이 릴리스 workflow 외 영역).
+**25/30 met** (D27 L4 auto-chain + D29 proactive phrasing partial + D1 tag + D3 CI PR + D8 48h observation = 5 items outside the release workflow scope).
 
 ### Quality Gates (all PASS)
 
@@ -1247,18 +2098,18 @@ Phase A 4 + Phase A+ 1 = **5개 병렬 실측 에이전트** 기반 Gap Taxonomy
 
 - **NEW 6-1 (ENH-202)**: Skills `context: fork` 1 → **9** (zero-script-qa + qa-phase + phase-1/2/3/4/5/8 + skill-status). Readonly-safe workflow skills isolated.
 - **NEW 6-2**: Legacy 3 modules removed (`lib/core/hook-io.js`, `lib/context/ops-metrics.js`, `lib/pdca/deploy-state-machine.js`, total 421 LOC, 0 production references).
-- **NEW 6-3 (Port↔Adapter)**: `lib/infra/cc-bridge.js` 신설 — Port `cc-payload.port.js` 구현체. `parseHookInput` / `detectCCVersion` / `getSessionId` / `isBypassMode` / `getToolName` / `getPermissionFlags` / `getHookEventName`. 24 L2 TC PASS. `lib/cc-regression/index.js`에서 `ccBridge` re-export.
+- **NEW 6-3 (Port↔Adapter)**: `lib/infra/cc-bridge.js` newly added — implementation of Port `cc-payload.port.js`. `parseHookInput` / `detectCCVersion` / `getSessionId` / `isBypassMode` / `getToolName` / `getPermissionFlags` / `getHookEventName`. 24 L2 TC PASS. Re-exported as `ccBridge` from `lib/cc-regression/index.js`.
 - **NEW 6-4 (ENH-275)**: MCP stdio L3 runtime runner (`test/contract/l3-mcp-runtime.test.js`). JSON-RPC 2.0 `initialize` + `tools/list` real spawn for both bkit servers. 42 TC PASS.
 - **NEW 6-5**: L5 E2E shell smoke suite (5 scenarios: SessionStart / .claude write block / check-guards / docs-code-sync / MCP tools).
-- **NEW 6-6 (ENH-276)**: `docs-code-scanner.scanVersions()` — BKIT_VERSION invariant 스캔 (bkit.config.json / plugin.json / README / CHANGELOG / hooks.json 5곳 sync).
+- **NEW 6-6 (ENH-276)**: `docs-code-scanner.scanVersions()` — BKIT_VERSION invariant scan (sync across 5 locations: bkit.config.json / plugin.json / README / CHANGELOG / hooks.json).
 - **NEW 6-7**: MEMORY.md 302 → 79 lines (≤150 cap). 3 detail files: `cc_version_history_v21xx.md`, `enh_backlog.md`, `github_issues_monitor.md`.
 - **Sprint 5.5 wiring**: hook attribution 3 sites (Stop / SessionEnd / SubagentStop) + CI Domain ESLint step (`scripts/check-domain-purity.js`) + PreCompact block counter (ENH-247/257 2-week measurement).
 
 ### Known Limitations
 
-- 본 섹션은 브랜치 스냅샷. `git tag v2.1.10` + GitHub Release 노트 작업은 main PR 머지 + 48h 관찰 후 예정.
-- `docs/02-design/features/bkit-v2110-integrated-enhancement.design.md` (2,644 lines) 리팩토링(≤800 lines overview + 4 addendum)은 v2.1.11+로 이월. 본 문서는 역사 기록으로 유지, Sprint 5a~6는 `bkit-v2110-gap-closure.design.md`에 정리.
-- `madge --circular` baseline 재생성(npm install 권한)은 v2.1.11+.
+- This section is a branch snapshot. The `git tag v2.1.10` + GitHub Release notes work is scheduled after the main PR merge + 48h observation.
+- The refactoring of `docs/02-design/features/bkit-v2110-integrated-enhancement.design.md` (2,644 lines) (≤800 lines overview + 4 addendum) is carried over to v2.1.11+. This document is kept as a historical record; Sprint 5a~6 is organized in `bkit-v2110-gap-closure.design.md`.
+- The `madge --circular` baseline regeneration (npm install permission) is for v2.1.11+.
 
 ---
 

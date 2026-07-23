@@ -142,7 +142,7 @@ Output Styles (v1.5.3)
 | `/phase-8-review` | Code review and gap analysis |
 | `/phase-9-deployment` | Production deployment (CI/CD, K8s) |
 
-### Agents (36 total, auto-triggered by keywords — 13 opus / 21 sonnet / 2 haiku)
+### Agents (34 total, auto-triggered by keywords — 6 fable / 10 opus / 16 sonnet / 2 haiku)
 
 > Full agent list at [bkit-system/components/agents/_agents-overview.md](../bkit-system/components/agents/_agents-overview.md). Models and constraints enforced by v2.1.10 3-Tier Agent Security Model + Sprint 7 `cto-lead` body (5 Task spawn examples + `Task(pm-lead)`/`Task(qa-lead)`/`Task(pdca-iterator)` frontmatter).
 
@@ -151,7 +151,7 @@ Output Styles (v1.5.3)
 | Agent | Trigger Keywords | Model |
 |-------|-----------------|-------|
 | gap-detector | verify, check, gap | opus |
-| pdca-iterator | improve, iterate, fix | sonnet |
+| pdca-iterator | improve, iterate, fix | opus |
 | code-analyzer | analyze, quality, review | opus |
 | report-generator | report, summary, complete | haiku |
 | starter-guide | beginner, help, learn | sonnet |
@@ -166,7 +166,7 @@ Output Styles (v1.5.3)
 
 | Agent | Trigger Keywords | Model | Role |
 |-------|-----------------|-------|------|
-| cto-lead | team, project lead, CTO | opus | Team orchestration, PDCA workflow management |
+| cto-lead | team, project lead, CTO | fable | Team orchestration, PDCA workflow management |
 | frontend-architect | frontend, UI architecture, component | sonnet | UI/UX design, component structure, Design System |
 | product-manager | requirements, feature spec, priority | sonnet | Requirements analysis, feature prioritization |
 | qa-strategist | test strategy, QA plan, quality metrics | sonnet | Test strategy, quality metrics coordination |
@@ -176,7 +176,7 @@ Output Styles (v1.5.3)
 
 | Agent | Trigger Keywords | Model | Frameworks |
 |-------|-----------------|-------|------------|
-| pm-lead | pm team, product discovery, PM analysis | sonnet | Team orchestration, 4-phase workflow |
+| pm-lead | pm team, product discovery, PM analysis | fable | Team orchestration, 4-phase workflow |
 | pm-discovery | market research, user research | sonnet | OST, Brainstorm, Assumption Risk Assessment |
 | pm-strategy | product strategy, positioning | sonnet | JTBD, Lean Canvas, SWOT, PESTLE, Porter's, Growth Loops |
 | pm-research | competitive analysis, trend research | sonnet | Personas, Competitors, TAM/SAM/SOM, Customer Journey, ICP |
@@ -235,7 +235,7 @@ export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 | Feature | Activation | Description |
 |---------|-----------|-------------|
 | Sprint Management | `/sprint <action>` | Meta-container grouping 1+ features under shared scope/budget/timeline. 8-phase lifecycle (prd→plan→design→do→iterate→qa→report→archived). 16 sub-actions. Orthogonal to PDCA 9-phase (both may coexist) |
-| Trust Level Scope L0-L4 | `--trust L0-L4` flag | `SPRINT_AUTORUN_SCOPE` controls auto-run boundary (L0 stop-after-plan / L1 design / L2 do / L3 qa / L4 archived = full-auto) |
+| Trust Level Scope L0-L4 | `--trust L0-L4` flag | `SPRINT_AUTORUN_SCOPE` controls auto-run boundary (L0/L1 stop-after-prd manual / L2 stop-after-design / L3 stop-after-report / L4 stop-after-archived = full-auto). `--approve` is the Trust-Level scope escape hatch ONLY — it does NOT bypass Quality Gate failures (run `/sprint measure` first). |
 | 4 Auto-Pause Triggers | Automatic during auto-run | QUALITY_GATE_FAIL / ITERATION_EXHAUSTED / BUDGET_EXCEEDED / PHASE_TIMEOUT — instant pause on detection |
 | 7-Layer S1 dataFlow QA | `/sprint qa <id>` | H1-H7 hops (UI→Client→API→Validation→DB→Response→Client→UI) integrity check |
 | L3 Contract Test (tracked CI gate) | `tests/contract/v2113-sprint-contracts.test.js` | 8 cross-sprint contracts (SC-01~08): entity shape / deps interface / infra adapters / handler signature / 4-layer chain / ACTION_TYPES 18 / SPRINT_AUTORUN_SCOPE mirror / hooks 21:24 |

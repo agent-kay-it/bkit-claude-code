@@ -6,23 +6,12 @@ deprecation-risk: none
 effort: medium
 description: |
   Sprint Management — generic sprint capability for ANY bkit user.
-  16 sub-actions: init, start, status, watch, phase, iterate, qa, report, archive, list, feature, pause, resume, fork, help, master-plan.
+  16 sub-actions: init, start, status, watch, phase, iterate, qa, report,
+  archive, list, feature, pause, resume, fork, help, master-plan.
   Triggers: sprint, sprint start, sprint init, sprint status, sprint list,
-  스프린트, 스프린트 시작, 스프린트 상태,
-  スプリント, スプリント開始, スプリント状態,
-  冲刺, 冲刺开始, 冲刺状态,
-  sprint, iniciar sprint, estado sprint,
-  sprint, demarrer sprint, statut sprint,
-  Sprint, Sprint starten, Sprint Status,
-  sprint, avviare sprint, stato sprint,
   master plan, multi-sprint plan, sprint master plan,
-  마스터 플랜, 멀티 스프린트 계획, 스프린트 마스터 플랜,
-  マスタープラン, マルチスプリント計画, スプリントマスタープラン,
-  主计划, 多冲刺计划, 冲刺主计划,
-  plan maestro, plan multi-sprint, plan maestro sprint,
-  plan maître, plan multi-sprint, plan maître sprint,
-  Masterplan, Multi-Sprint-Plan, Sprint-Masterplan,
-  piano principale, piano multi-sprint, piano principale sprint.
+  스프린트, 스프린트 시작, 스프린트 상태, 마스터 플랜, 멀티 스프린트 계획, 스프린트 마스터 플랜,
+  スプリント, 冲刺, iniciar sprint, demarrer sprint, Sprint starten, avviare sprint.
 argument-hint: "[action] [name] [--trust L0-L4] [--from <phase>]"
 user-invocable: true
 allowed-tools:
@@ -147,6 +136,19 @@ See:
 - Starter level projects — sprint overhead exceeds value
 - One-off bug fixes that do not warrant a master plan
 
+## Delegation notes
+
+Extended trigger keywords, moved here from the frontmatter description
+(issue #129 token diet) — one anchor per language stays in the description;
+the full multilingual list is preserved below:
+
+- JA: スプリント開始, スプリント状態, マスタープラン, マルチスプリント計画, スプリントマスタープラン
+- ZH: 冲刺开始, 冲刺状态, 主计划, 多冲刺计划, 冲刺主计划
+- ES: iniciar sprint, estado sprint, plan maestro, plan multi-sprint, plan maestro sprint
+- FR: demarrer sprint, statut sprint, plan maître, plan multi-sprint, plan maître sprint
+- DE: Sprint starten, Sprint Status, Masterplan, Multi-Sprint-Plan, Sprint-Masterplan
+- IT: avviare sprint, stato sprint, piano principale, piano multi-sprint, piano principale sprint
+
 ## Related Skills and Agents
 
 - `bkit:pdca` — single-feature PDCA cycle (foundation primitive)
@@ -243,9 +245,34 @@ Gates outside this table (M5, M10, S2, S4) return
 sequentially (no Promise.all) to avoid #56293 sub-agent caching 10x.
 
 **Dispatcher requirement**: the LLM dispatcher (main session) must inject
-`deps.agentTaskRunner: ({ subagent_type, prompt }) => Promise<{ output }>`
-wrapping Claude Code's Task tool. Without it the use case returns
-`reason: 'no_agent_runner'` per gate (deterministic, not silent fail).
+`deps.agentTaskRunner` wrapping Claude Code's Task tool. Without it the use
+case returns `reason: 'no_agent_runner'` per gate (deterministic, not silent
+fail). The handler layer exposes `createTaskToolRunner({ invokeTaskTool })`
+(in `scripts/lib/sprint-handler-shared.js`, re-exported from
+`scripts/sprint-handler.js`) to build this wrapper:
+
+```javascript
+const { createTaskToolRunner } = require('<bkit-root>/scripts/lib/sprint-handler-shared');
+const runner = createTaskToolRunner({
+  invokeTaskTool: async ({ subagent_type, prompt }) => {
+    // delegate to Claude Code's Task tool in the main session
+    return { text: await callTaskTool({ subagent_type, prompt }) };
+  },
+});
+await handleSprintAction('measure', { id, gate }, { agentTaskRunner: runner });
+```
+
+**Two invocation paths:**
+
+1. **In-process (primary, main session):** the LLM dispatcher calls
+   `handleSprintAction(...)` directly with `deps.agentTaskRunner` injected.
+   Gate measurement works end-to-end.
+2. **Subprocess CLI (`node scripts/sprint-handler.js ...`):** runs in a
+   separate Node process that cannot see the Task tool, so it passes `{}`
+   and gate measurement returns `no_agent_runner`. Use this path only for
+   non-measurement actions (status, list, help) or when the in-process path
+   is unavailable; for any action that measures gates, use the in-process
+   dispatcher call with an injected runner.
 
 ### 10.1.1 `phase --approve` semantics (v2.1.16, Issue #95)
 

@@ -11,74 +11,18 @@
  */
 
 const path = require('path');
-const { readStdinSync, outputAllow } = require('../lib/core/io');
+const { readStdinBounded, outputAllow } = require('../lib/core/io');
+const { STDIN_READ_TIMEOUT_MS } = require('../lib/core/constants');
 const { debugLog } = require('../lib/core/debug');
 const { getPdcaStatusFull } = require('../lib/pdca/status');
 const { getActiveSkill, getActiveAgent, clearActiveContext } = require('../lib/task/context');
+const { normalizeSkillName } = require('../lib/core/skill-name');
 
-// ============================================================
-// v2.0.0 Lazy Module Loaders
-// ============================================================
-
-let _stateMachine = null;
-function getStateMachine() {
-  if (!_stateMachine) try { _stateMachine = require('../lib/pdca/state-machine'); } catch (_) {}
-  return _stateMachine;
-}
-
-let _checkpointManager = null;
-function getCheckpointManager() {
-  if (!_checkpointManager) try { _checkpointManager = require('../lib/control/checkpoint-manager'); } catch (_) {}
-  return _checkpointManager;
-}
-
-let _auditLogger = null;
-function getAuditLogger() {
-  if (!_auditLogger) try { _auditLogger = require('../lib/audit/audit-logger'); } catch (_) {}
-  return _auditLogger;
-}
-
-let _gateManager = null;
-function getGateManager() {
-  if (!_gateManager) try { _gateManager = require('../lib/quality/gate-manager'); } catch (_) {}
-  return _gateManager;
-}
-
-let _metricsCollector = null;
-function getMetricsCollector() {
-  if (!_metricsCollector) try { _metricsCollector = require('../lib/quality/metrics-collector'); } catch (_) {}
-  return _metricsCollector;
-}
-
-let _workflowEngine = null;
-function getWorkflowEngine() {
-  if (!_workflowEngine) try { _workflowEngine = require('../lib/pdca/workflow-engine'); } catch (_) {}
-  return _workflowEngine;
-}
-
-let _circuitBreaker = null;
-function getCircuitBreaker() {
-  if (!_circuitBreaker) try { _circuitBreaker = require('../lib/pdca/circuit-breaker'); } catch (_) {}
-  return _circuitBreaker;
-}
-
-let _trustEngine = null;
-function getTrustEngine() {
-  if (!_trustEngine) try { _trustEngine = require('../lib/control/trust-engine'); } catch (_) {}
-  return _trustEngine;
-}
-
-let _explanationGenerator = null;
-function getExplanationGenerator() {
-  if (!_explanationGenerator) try { _explanationGenerator = require('../lib/audit/explanation-generator'); } catch (_) {}
-  return _explanationGenerator;
-}
-
-let _decisionTracer = null;
-function getDecisionTracer() {
-  if (!_decisionTracer) try { _decisionTracer = require('../lib/audit/decision-tracer'); } catch (_) {}
-  return _decisionTracer;
-}
+// v2.0.0 Lazy Module Loaders — S3a ENH-346: extracted to scripts/lib/unified-stop-deps.js
+const {
+  getStateMachine, getCheckpointManager, getAuditLogger, getGateManager, getMetricsCollector,
+  getWorkflowEngine, getCircuitBreaker, getTrustEngine, getExplanationGenerator, getDecisionTracer,
+} = require('./lib/unified-stop-deps');
 
 // ============================================================
 // Handler Registry
@@ -253,13 +197,21 @@ function executeHandler(handlerPath, context) {
 // Main Execution
 // ============================================================
 
+// Issue #139: the Stop hook gates turn completion, so it must never block on
+// stdin. readStdinBounded reads the payload with parse-early + a hard timeout
+// (STDIN_READ_TIMEOUT_MS) and destroys stdin on resolve, so this hook can never
+// exceed that wall-clock budget even if Claude Code holds the stdin write-end
+// open. The whole body runs inside an async IIFE so the event loop stays free
+// for the timeout to fire while the payload is being read (the read is the very
+// first operation; everything after it remains synchronous).
+(async () => {
 debugLog('UnifiedStop', 'Hook started');
 
-// Read hook context
+// Read hook context (bounded — see Issue #139 note above)
 let hookContext = {};
 try {
-  const input = readStdinSync();
-  hookContext = typeof input === 'string' ? JSON.parse(input) : input;
+  const input = await readStdinBounded(STDIN_READ_TIMEOUT_MS);
+  hookContext = (input && typeof input === 'object') ? input : {};
 } catch (e) {
   debugLog('UnifiedStop', 'Failed to parse context', { error: e.message });
 }
@@ -276,9 +228,14 @@ debugLog('UnifiedStop', 'Context received', {
   agentType
 });
 
-// Detect active skill/agent
-const activeSkill = detectActiveSkill(hookContext);
-const activeAgent = detectActiveAgent(hookContext);
+// Detect active skill/agent.
+// #125: the detection sources (tool_input.skill, the active-skill marker) may
+// carry the `plugin:skill` form, but SKILL_HANDLERS / AGENT_HANDLERS and the
+// bare comparisons below (`activeSkill === 'control'`, …) are keyed by folder
+// name. Canonicalize once so Stop-handler dispatch survives the namespaced form.
+// normalizeSkillName is null-safe, so a null detection stays null.
+const activeSkill = normalizeSkillName(detectActiveSkill(hookContext));
+const activeAgent = normalizeSkillName(detectActiveAgent(hookContext));
 
 debugLog('UnifiedStop', 'Detection result', {
   activeSkill,
@@ -709,8 +666,8 @@ try {
   const usage = (hookContext && hookContext.message && hookContext.message.usage) || {};
   const ccVersionResolved = ccRegression.detectCCVersion() || process.env.CLAUDE_CODE_VERSION || 'unknown';
   ccRegression.recordTurn({
-    // From stdin payload — fallback to env for parity with future CC versions
-    sessionId: hookContext.session_id || process.env.CLAUDE_SESSION_ID || '',
+    // From stdin payload — env fallback prefers CLAUDE_CODE_SESSION_ID (#119)
+    sessionId: hookContext.session_id || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '',
     agent: activeAgent || 'main',
     model: (hookContext.message && hookContext.message.model)
       || process.env.CLAUDE_MODEL
@@ -735,7 +692,7 @@ try {
     ccRegression.recordEvent({
       hookEvent: 'Stop',
       ccVersion: ccVersionResolved,
-      sessionId: hookContext.session_id || process.env.CLAUDE_SESSION_ID || null,
+      sessionId: hookContext.session_id || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null,
       timestamp: new Date().toISOString(),
       context: { agent: activeAgent || 'main', skill: activeSkill || null },
     });
@@ -748,4 +705,8 @@ debugLog('UnifiedStop', 'Hook completed', {
   handled,
   activeSkill,
   activeAgent
+});
+})().catch((e) => {
+  // Last-resort guard: the Stop hook must never throw out of the async body.
+  try { debugLog('UnifiedStop', 'Unhandled error in async body', { error: e && e.message }); } catch (_) { /* ignore */ }
 });

@@ -27,10 +27,10 @@ bkit is a practical implementation of **Context Engineering**:
 ┌─────────────────────────────────────────────────────────────────┐
 │              bkit Context Engineering Components                 │
 ├─────────────────────────────────────────────────────────────────┤
-│  Domain Knowledge (43 Skills)  → Structured domain knowledge     │
-│  Behavioral Rules (36 Agents)  → Role-based behavioral rules     │
-│  State Management (lib/)       → 142 modules, 16 subdirectories  │
-│  6-Layer Hook System           → 21 events, 24 blocks            │
+│  Domain Knowledge (44 Skills)  → Structured domain knowledge     │
+│  Behavioral Rules (34 Agents)  → Role-based behavioral rules     │
+│  State Management (lib/)       → 190 modules, 22 subdirectories  │
+│  6-Layer Hook System           → 22 events, 25 blocks            │
 │  Clean Architecture 4-Layer    → Domain / App / Infra / Pres     │
 │  Dynamic Injection             → Conditional context selection   │
 └─────────────────────────────────────────────────────────────────┘
@@ -138,7 +138,7 @@ The following skills were consolidated:
 - [[../lib/team/hooks|team hooks]] - TaskCompleted and TeammateIdle handlers
 
 ### Agent Memory
-- All 36 agents configured with `memory:` frontmatter
+- All 34 agents configured with `memory:` frontmatter
 - 9 agents: `project` scope, 2 agents: `user` scope
 - Automatic cross-session context persistence
 
@@ -171,7 +171,7 @@ The following skills were consolidated:
 - `/claude-code-learning` - Learning curriculum
 - `/code-review` - Code review and quality analysis
 
-## Hooks (21 events)
+## Hooks (22 events)
 
 ### Global Hooks (hooks/hooks.json)
 - [[components/hooks/_hooks-overview|SessionStart]] - Plugin initialization with AskUserQuestion guidance
@@ -349,9 +349,9 @@ bkit supports languages and frameworks organized by tier:
 **Components (v2.1.13 GA, 2026-05-12)**:
 - `skills/` - 44 skills (v2.1.13 added sprint; v2.1.11 added bkit-evals, bkit-explore, pdca-watch, pdca-fast-track)
 - `agents/` - 34 agents (v2.1.13 added sprint-master-planner / sprint-orchestrator / sprint-qa-flow / sprint-report-writer)
-- `scripts/` - 51 scripts (Node.js) — v2.1.13 added sprint-handler.js (660 LOC) + sprint-memory-writer.js (138 LOC)
-- `lib/` - 19 subdirectories, 163 modules — Clean Architecture 4-Layer with 7 Port↔Adapter pairs (v2.1.13 added `lib/application/sprint-lifecycle/` 13 modules + `lib/infra/sprint/` 9 modules)
-- `templates/` - 39 templates (v2.1.13 added 7 sprint templates: master-plan/prd/plan/design/iterate/qa/report)
+- `scripts/` - 61 scripts (Node.js) — v2.1.13 added sprint-handler.js (660 LOC) + sprint-memory-writer.js (138 LOC)
+- `lib/` - 22 subdirectories, 190 modules — Clean Architecture 4-Layer with 7 Port↔Adapter pairs (v2.1.13 added `lib/application/sprint-lifecycle/` 13 modules + `lib/infra/sprint/` 9 modules)
+- `templates/` - 40 templates (v2.1.13 added 7 sprint templates: master-plan/prd/plan/design/iterate/qa/report)
 - `output-styles/` - 4 styles
 - `servers/` - 2 MCP servers (bkit-pdca: 13 tools, bkit-analysis: 6 tools = **19 tools total**, registered via `lib/infra/mcp-port-registry.js`. v2.1.13 added bkit_sprint_list / bkit_sprint_status / bkit_master_plan_read)
 - Test files - 118+ (qa-aggregate scope), 4,000+ TC (3,762 baseline + 261 v2.1.11 + 8 v2.1.13 contract SC-01~08)

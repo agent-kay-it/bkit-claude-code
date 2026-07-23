@@ -194,35 +194,39 @@ test('SO-022', 'parseClassification: partial fields', () => {
 
 // ── getNextStepMessage ──
 
+// #135 (v2.1.28): getNextStepMessage is now language-aware (EN default / KO via
+// persisted locale). With no persisted language the resolved locale is EN, so
+// these assert the English guidance strings. KO-locale parity is covered in
+// test/regression/issue-135-multiaction-guidance.test.js.
 test('SO-023', 'getNextStepMessage: known skill returns specific message', () => {
   const msg = getNextStepMessage('phase-1-schema');
-  assert.ok(msg.includes('스키마'));
+  assert.ok(msg.includes('schema'));
 });
 
 test('SO-024', 'getNextStepMessage: phase-8-review returns review message', () => {
   const msg = getNextStepMessage('phase-8-review');
-  assert.ok(msg.includes('리뷰'));
+  assert.ok(msg.includes('review'));
 });
 
 test('SO-025', 'getNextStepMessage: phase-9-deployment returns deploy message', () => {
   const msg = getNextStepMessage('phase-9-deployment');
-  assert.ok(msg.includes('배포'));
+  assert.ok(msg.includes('deployment'));
 });
 
 test('SO-026', 'getNextStepMessage: unknown skill returns fallback message', () => {
   const msg = getNextStepMessage('unknown-skill');
-  assert.ok(msg.includes('다음 단계'));
+  assert.ok(msg.includes('Next step'));
   assert.ok(msg.includes('unknown-skill'));
 });
 
 test('SO-027', 'getNextStepMessage: phase-2-convention returns convention message', () => {
   const msg = getNextStepMessage('phase-2-convention');
-  assert.ok(msg.includes('컨벤션'));
+  assert.ok(msg.includes('convention'));
 });
 
 test('SO-028', 'getNextStepMessage: phase-3-mockup returns mockup message', () => {
   const msg = getNextStepMessage('phase-3-mockup');
-  assert.ok(msg.includes('목업'));
+  assert.ok(msg.includes('mockup'));
 });
 
 // ── clearCache / getCacheStats ──
@@ -343,6 +347,75 @@ test('SO-041', 'All 14 exports exist', () => {
   assert.strictEqual(typeof isMultiBindingSkill, 'function');
   assert.strictEqual(typeof parseClassification, 'function');
   assert.strictEqual(typeof getSkillsByClassification, 'function');
+});
+
+// ── #125: namespaced skill-name resolution ──
+// getSkillConfig must resolve the CC `plugin:skill` form (e.g. bkit:pdca) to the
+// bare folder (skills/pdca/) so next-skill / pdca-phase suggestions fire for
+// tool-invoked skills instead of silently returning null.
+
+test('SO-042', 'getSkillConfig: namespaced bkit:pdca resolves like bare pdca', () => {
+  clearCache();
+  try {
+    const ns = getSkillConfig('bkit:pdca');
+    const bare = getSkillConfig('pdca');
+    if (bare) {
+      assert.ok(ns, 'namespaced form must not be null');
+      assert.strictEqual(ns.name, bare.name);
+    }
+  } catch (e) {
+    assert.ok(e.message.includes('null') || e.message.includes('PLUGIN_ROOT'));
+  }
+});
+
+test('SO-043', 'getSkillConfig: namespaced form preserves pdca-phase (bkit:code-review → check)', () => {
+  clearCache();
+  try {
+    const ns = getSkillConfig('bkit:code-review');
+    const bare = getSkillConfig('code-review');
+    if (bare) {
+      assert.ok(ns, 'namespaced form must not be null');
+      assert.strictEqual(ns['pdca-phase'], bare['pdca-phase']);
+    }
+  } catch (e) {
+    assert.ok(e.message.includes('null') || e.message.includes('PLUGIN_ROOT'));
+  }
+});
+
+test('SO-044', 'getSkillConfig: bare and namespaced share one cache entry (bare folder key)', () => {
+  clearCache();
+  try {
+    const bare = getSkillConfig('pdca');
+    getSkillConfig('bkit:pdca');
+    if (bare) {
+      const stats = getCacheStats();
+      assert.ok(stats.entries.includes('pdca'), 'cache keyed by bare folder name');
+      assert.ok(!stats.entries.includes('bkit:pdca'), 'namespaced form must not create a duplicate key');
+    }
+  } catch (e) {
+    assert.ok(true);
+  }
+});
+
+test('SO-045', 'getSkillConfig: unknown namespaced skill still returns null', () => {
+  clearCache();
+  try {
+    const config = getSkillConfig('bkit:nonexistent-skill-xyz-12345');
+    assert.strictEqual(config, null);
+  } catch (e) {
+    assert.ok(e.message.includes('null') || e.message.includes('PLUGIN_ROOT'));
+  }
+});
+
+test('SO-046', 'getAgentForAction: resolves via namespaced skill name', () => {
+  clearCache();
+  try {
+    const bareAgent = getAgentForAction('code-review', 'default');
+    const nsAgent = getAgentForAction('bkit:code-review', 'default');
+    assert.strictEqual(nsAgent, bareAgent);
+  } catch (e) {
+    assert.ok(true);
+  }
 });
 
 console.log(`\n--- Results: ${passed}/${total} passed, ${failed} failed ---`);
